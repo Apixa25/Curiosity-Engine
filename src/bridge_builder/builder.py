@@ -192,8 +192,15 @@ Give your genuine thoughts on this commit. Rules:
 
 
 class BridgeBuilder:
-    def __init__(self, llm: LLMAdapter):
+    def __init__(self, llm: LLMAdapter, persona: str = ""):
         self.llm = llm
+        self.persona = persona
+
+    def _system_prompt(self) -> str:
+        """Build the system prompt, injecting persona if available."""
+        if self.persona:
+            return BRIDGE_SYSTEM + "\n\n" + self.persona
+        return BRIDGE_SYSTEM
 
     async def build_commit_review(self, commit_info, user_context: str = "") -> str | None:
         """Generate a thoughtful, direct review of a git commit.
@@ -264,7 +271,7 @@ class BridgeBuilder:
             )
 
         temp = 0.7 if tier["name"] == "casual" else 0.8 if tier["name"] == "interested" else 0.85
-        resp = await self.llm.generate(prompt, system=BRIDGE_SYSTEM, temperature=temp)
+        resp = await self.llm.generate(prompt, system=self._system_prompt(), temperature=temp)
 
         text = resp.text.strip().strip('"').strip("*")
 
@@ -306,7 +313,7 @@ class BridgeBuilder:
             overheard_section=overheard_section,
         )
 
-        resp = await self.llm.generate(prompt, system=BRIDGE_SYSTEM, temperature=0.75)
+        resp = await self.llm.generate(prompt, system=self._system_prompt(), temperature=0.75)
         text = resp.text.strip().strip('"').strip("*")
 
         if text.upper() == "SKIP" or len(text) < 5:

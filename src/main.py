@@ -30,6 +30,9 @@ from src.conversation.responder import DirectResponder
 from src.output.voice import VoiceOutput, VoiceConfig
 from src.input_pipeline.git_monitor import GitMonitor
 from src.embeddings.provider import EmbeddingProvider, EmbeddingConfig
+from src.memory.store import MemoryStore, MemoryConfig
+from src.memory.incubation import IncubationQueue
+from src.memory.profile import ProfileBuilder
 from src.models import ContextSnapshot, Interjection
 
 
@@ -61,7 +64,7 @@ class CreativityEngine:
         ))
         self.tree_gen = AssociationTreeGenerator(self.llm, self.cfg.association_tree, self.embedder)
         self.scorer = InterestScorer(self.llm, self.cfg.scoring, self.embedder)
-        self.bridge = BridgeBuilder(self.llm)
+        self.bridge = BridgeBuilder(self.llm, persona="")
         self.searcher = WebSearcher(self.llm)
         self.past_topics: list[str] = []
         self.current_context: str = ""
@@ -85,6 +88,24 @@ class CreativityEngine:
             repo_path=self.cfg.git.repo_path,
             poll_interval_seconds=self.cfg.git.poll_interval_seconds,
             max_diff_chars=self.cfg.git.max_diff_chars,
+        )
+        self.memory = MemoryStore(MemoryConfig(
+            enabled=self.cfg.memory.enabled,
+            persist_directory=self.cfg.memory.persist_directory,
+            collection_name=self.cfg.memory.collection_name,
+        ))
+        self.incubation = IncubationQueue(
+            memory=self.memory,
+            llm=self.llm,
+            rescore_interval_minutes=self.cfg.memory.rescore_interval_minutes,
+            max_age_hours=self.cfg.memory.max_age_hours,
+            max_rescores=self.cfg.memory.max_rescores,
+        )
+        self.profile = ProfileBuilder(
+            memory=self.memory,
+            llm=self.llm,
+            profile_path=self.cfg.memory.persist_directory + "/user_profile.json",
+            rebuild_every_n_ratings=self.cfg.memory.profile_rebuild_every,
         )
         self._overheard_buffer: list[str] = []
 
@@ -171,6 +192,7 @@ class CreativityEngine:
             if best_score.total < self.cfg.scoring.fire_threshold:
                 if verbose:
                     print(f"   🤫 Score {best_score.total:.3f} below threshold {self.cfg.scoring.fire_threshold}")
+                self._incubate_chains(ranked, seed_topic)
                 return None
 
             if verbose:
@@ -199,6 +221,9 @@ class CreativityEngine:
             self.past_topics.append(best_chain.endpoint_topic)
             self.scorer.record_interjection(best_chain)
 
+            self._store_fired_chain(best_chain, best_score, interjection, seed_topic)
+            self._incubate_chains(ranked[1:], seed_topic)
+
             elapsed = time.time() - t0
             if verbose:
                 print(f"   ⏱️  Cycle took {elapsed:.1f}s")
@@ -207,6 +232,70 @@ class CreativityEngine:
 
         finally:
             self._thinking = False
+
+    def _store_fired_chain(self, chain, score, interjection, seed_topic: str) -> None:
+        """Persist the fired chain in long-term memory."""
+        if not self.memory.is_available:
+            return
+
+        import uuid
+        endpoint = chain.nodes[-1] if chain.nodes else None
+        embedding = endpoint.embedding if endpoint else None
+
+        self.memory.store_chain(
+            chain_id=f"chain-{uuid.uuid4().hex[:12]}",
+            seed_topic=seed_topic,
+            endpoint_topic=chain.endpoint_topic,
+            chain_summary=chain.summary(),
+            domains=chain.nodes[-1].chain_domains() if chain.nodes else [],
+            domain_crossings=chain.domain_crossings,
+            score=score.total,
+            embedding=embedding,
+            interjection_text=interjection.interjection_text if interjection else "",
+            context=self.current_context,
+            status="fired",
+        )
+
+    def _incubate_chains(self, ranked_chains, seed_topic: str) -> None:
+        """Send promising-but-not-ready chains to the incubation queue."""
+        if not self.memory.is_available:
+            return
+
+        import uuid
+        threshold = self.cfg.scoring.incubation_threshold
+
+        for chain, score in ranked_chains:
+            if threshold <= score.total < self.cfg.scoring.fire_threshold:
+                endpoint = chain.nodes[-1] if chain.nodes else None
+                embedding = endpoint.embedding if endpoint else None
+                self.incubation.incubate(
+                    chain_id=f"incub-{uuid.uuid4().hex[:12]}",
+                    seed_topic=seed_topic,
+                    endpoint_topic=chain.endpoint_topic,
+                    chain_summary=chain.summary(),
+                    domains=chain.nodes[-1].chain_domains() if chain.nodes else [],
+                    domain_crossings=chain.domain_crossings,
+                    score=score.total,
+                    embedding=embedding,
+                    context=self.current_context,
+                )
+
+    async def _on_incubation_promotion(self, stored_chain, new_score: float) -> None:
+        """Called when an incubating chain ripens and should be delivered."""
+        if stored_chain.interjection_text:
+            text = stored_chain.interjection_text
+        else:
+            text = (f"You know what just clicked? Earlier I was thinking about "
+                    f"\"{stored_chain.seed_topic}\" and how it connects to "
+                    f"\"{stored_chain.endpoint_topic}\" — and now with what you're "
+                    f"doing, that connection feels so much more relevant.")
+
+        print(f"\n{'═' * 70}")
+        print(f"🧪 INCUBATED IDEA HATCHED  [score: {new_score:.2f}]:\n")
+        print(f"   \"{text}\"")
+        print(f"\n{'═' * 70}")
+        self.responder.add_engine_interjection(text)
+        await self._speak(text)
 
     # ── LIVE COMPANION MODE ──────────────────────────────────────────
 
@@ -239,6 +328,10 @@ class CreativityEngine:
         self.embedder.initialize()
         self.enable_multimodal()
         self.voice.initialize()
+        self.memory.initialize()
+        self.profile.initialize()
+        if self.profile.has_profile:
+            self.bridge.persona = self.profile.persona_injection
         if self.cfg.git.enabled:
             self.git_monitor.initialize()
 
@@ -262,6 +355,9 @@ class CreativityEngine:
         print("     'mute' / 'unmute'   → Toggle voice output on/off")
         print("     'voice <name>'      → Switch voice (alloy/echo/fable/onyx/nova/shimmer)")
         print("     'voice list'        → Show all available voices")
+        print("     '👍' or 'good'      → Rate last interjection positively")
+        print("     '👎' or 'bad'       → Rate last interjection negatively")
+        print("     'rate 1-5'          → Rate last interjection (1=terrible, 5=amazing)")
         print("     'quit'              → Shut down")
         print(f"{'─' * 70}")
 
@@ -296,6 +392,11 @@ class CreativityEngine:
         if self.git_monitor.is_available:
             tasks.append(asyncio.create_task(self.git_monitor.start(self._on_new_commit)))
 
+        if self.memory.is_available:
+            tasks.append(asyncio.create_task(
+                self.incubation.start(on_promotion=self._on_incubation_promotion)
+            ))
+
         try:
             done, pending = await asyncio.wait(
                 tasks,
@@ -312,6 +413,7 @@ class CreativityEngine:
 
         self._listening = False
         self.git_monitor.stop()
+        self.incubation.stop()
         print("\n👋 Creativity Engine shutting down. Stay creative!")
         if self.vision:
             self.vision.release()
@@ -329,6 +431,7 @@ class CreativityEngine:
             overheard_text = " | ".join(self._overheard_buffer[-3:])
             context_with_overheard += f" (overheard: {overheard_text})"
             self._overheard_buffer.clear()
+        self.incubation.set_context(context_with_overheard)
 
         if self._multimodal and self.assembler:
             ctx = await self.assembler.assemble(
@@ -833,6 +936,9 @@ class CreativityEngine:
                 print(f"      Past topics: {len(self.past_topics)}")
                 print(f"      Overheard buffer: {len(self._overheard_buffer)} items")
                 print(f"      Conversation turns: {len(self.responder.history)}")
+                print(f"      Memory: {self.memory.chain_count} chains stored")
+                print(f"      Incubating: {self.incubation.queue_size} ideas")
+                print(f"      Profile: {'✅ built' if self.profile.has_profile else '⏳ needs more ratings'}")
 
             elif cmd == "mute":
                 self.voice.cfg.enabled = False
@@ -864,12 +970,48 @@ class CreativityEngine:
                     self._force_creative = True
                     self.heartbeat._remaining_seconds = 0
 
+            elif cmd in ("👍", "good", "like", "thumbs up", "nice"):
+                if self.memory.rate_last_interjection(5):
+                    print("   ⭐ Rated last interjection 5/5 — I'll remember you liked that!")
+                    self.profile.on_rating()
+                    if await self.profile.rebuild_if_needed():
+                        self.bridge.persona = self.profile.persona_injection
+                else:
+                    print("   ❌ Nothing to rate yet")
+
+            elif cmd in ("👎", "bad", "dislike", "thumbs down", "meh"):
+                if self.memory.rate_last_interjection(1):
+                    print("   📝 Rated last interjection 1/5 — noted, I'll adjust")
+                    self.profile.on_rating()
+                    if await self.profile.rebuild_if_needed():
+                        self.bridge.persona = self.profile.persona_injection
+                else:
+                    print("   ❌ Nothing to rate yet")
+
+            elif cmd.startswith("rate "):
+                try:
+                    rating = int(cmd.split(" ", 1)[1].strip())
+                    if 1 <= rating <= 5:
+                        if self.memory.rate_last_interjection(rating):
+                            stars = "⭐" * rating
+                            print(f"   {stars} Rated {rating}/5 — stored in memory")
+                            self.profile.on_rating()
+                            if await self.profile.rebuild_if_needed():
+                                self.bridge.persona = self.profile.persona_injection
+                        else:
+                            print("   ❌ Nothing to rate yet")
+                    else:
+                        print("   ❌ Use 'rate 1' through 'rate 5'")
+                except ValueError:
+                    print("   ❌ Use 'rate 1' through 'rate 5'")
+
             else:
                 typed_result = self.detector.detect(user_input, self.current_context)
                 if typed_result.mode == "DIRECT":
                     await self._handle_direct_address(typed_result.message or user_input)
                 else:
                     self.current_context = user_input
+                    self.incubation.set_context(user_input)
                     print(f"   ✅ Context updated: \"{self.current_context}\"")
 
     # ── SINGLE-FIRE & INTERACTIVE MODES (unchanged) ──────────────────

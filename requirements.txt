@@ -18,9 +18,13 @@ pyyaml>=6.0
 # Embeddings (for full scoring)
 numpy>=1.24.0
 
-# Future dependencies (not needed for POC):
-# sentence-transformers   # local embeddings
-# chromadb                # vector database
-# opencv-python           # webcam capture
-# sounddevice             # audio capture
-# openai-whisper          # speech-to-text
+# Memory & Vector Storage
+chromadb>=0.5.0
+
+# Screen Awareness (optional)
+mss>=9.0.0              # fast screenshot capture
+Pillow>=10.0.0          # image processing for screenshots
+# pygetwindow>=0.0.9    # cross-platform window title (Windows uses ctypes instead)
+
+# Local Embeddings (optional, for offline mode)
+# sentence-transformers>=2.2.0

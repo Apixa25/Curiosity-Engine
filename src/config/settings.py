@@ -114,6 +114,17 @@ class GitMonitorConfig:
 
 
 @dataclass
+class MemoryPersistConfig:
+    enabled: bool = True
+    persist_directory: str = "data/memory"
+    collection_name: str = "creativity_chains"
+    rescore_interval_minutes: int = 60
+    max_age_hours: int = 24
+    max_rescores: int = 5
+    profile_rebuild_every: int = 10  # rebuild user profile every N ratings
+
+
+@dataclass
 class InputPipelineConfig:
     vision: VisionConfig = field(default_factory=VisionConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
@@ -130,6 +141,7 @@ class EngineConfig:
     voice: VoiceOutputConfig = field(default_factory=VoiceOutputConfig)
     git: GitMonitorConfig = field(default_factory=GitMonitorConfig)
     embeddings: EmbeddingConfig = field(default_factory=EmbeddingConfig)
+    memory: MemoryPersistConfig = field(default_factory=MemoryPersistConfig)
 
 
 def load_config(config_path: str | Path | None = None) -> EngineConfig:
@@ -163,6 +175,7 @@ def load_config(config_path: str | Path | None = None) -> EngineConfig:
     voice_raw = raw.get("voice", {})
     git_raw = raw.get("git", {})
     emb_raw = raw.get("embeddings", {})
+    mem_raw = raw.get("memory", {})
 
     return EngineConfig(
         heartbeat=HeartbeatConfig(
@@ -242,5 +255,14 @@ def load_config(config_path: str | Path | None = None) -> EngineConfig:
             openai_model=emb_raw.get("openai_model", "text-embedding-3-small"),
             local_model=emb_raw.get("local_model", "all-MiniLM-L6-v2"),
             cache_enabled=emb_raw.get("cache_enabled", True),
+        ),
+        memory=MemoryPersistConfig(
+            enabled=mem_raw.get("enabled", True),
+            persist_directory=mem_raw.get("persist_directory", "data/memory"),
+            collection_name=mem_raw.get("collection_name", "creativity_chains"),
+            rescore_interval_minutes=mem_raw.get("rescore_interval_minutes", 60),
+            max_age_hours=mem_raw.get("max_age_hours", 24),
+            max_rescores=mem_raw.get("max_rescores", 5),
+            profile_rebuild_every=mem_raw.get("profile_rebuild_every", 10),
         ),
     )

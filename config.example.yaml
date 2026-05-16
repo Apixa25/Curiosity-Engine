@@ -99,6 +99,10 @@ search:
   results_per_query: 5
 
 memory:
-  vector_db: "chromadb"
-  sqlite_path: "data/creativity.db"
-  collection_name: "conversations"
+  enabled: true
+  persist_directory: "data/memory"   # where ChromaDB stores your long-term memory
+  collection_name: "creativity_chains"
+  rescore_interval_minutes: 60       # how often to re-evaluate incubating ideas
+  max_age_hours: 24                  # incubating ideas expire after this long
+  max_rescores: 5                    # max times an idea gets re-evaluated
+  profile_rebuild_every: 10          # rebuild personality profile every N ratings
