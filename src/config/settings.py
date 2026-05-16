@@ -18,6 +18,11 @@ class HeartbeatConfig:
     min_minutes: int = 1
     max_minutes: int = 10
     creative_threshold: float = 0.55
+    adaptive: bool = True
+    fast_min: float = 1.0           # when novelty is high — lean in
+    fast_max: float = 3.0
+    slow_min: float = 7.0           # when novelty is low — zone out
+    slow_max: float = 15.0
 
 
 @dataclass
@@ -74,6 +79,17 @@ class AudioConfig:
 
 
 @dataclass
+class ScreenConfig:
+    enabled: bool = True
+    base_weight: float = 0.30
+    history_window: int = 10
+    screenshot_enabled: bool = True
+    min_novelty_for_screenshot: float = 0.5
+    excluded_apps: list[str] = field(default_factory=list)
+    excluded_urls: list[str] = field(default_factory=list)
+
+
+@dataclass
 class VoiceOutputConfig:
     enabled: bool = True
     model: str = "tts-1"          # "tts-1" (fast) or "tts-1-hd" (higher quality)
@@ -101,6 +117,7 @@ class GitMonitorConfig:
 class InputPipelineConfig:
     vision: VisionConfig = field(default_factory=VisionConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
+    screen: ScreenConfig = field(default_factory=ScreenConfig)
 
 
 @dataclass
@@ -142,6 +159,7 @@ def load_config(config_path: str | Path | None = None) -> EngineConfig:
     ip = raw.get("input_pipeline", {})
     vis = ip.get("vision", {})
     aud = ip.get("audio", {})
+    scr = ip.get("screen", {})
     voice_raw = raw.get("voice", {})
     git_raw = raw.get("git", {})
     emb_raw = raw.get("embeddings", {})
@@ -151,6 +169,11 @@ def load_config(config_path: str | Path | None = None) -> EngineConfig:
             min_minutes=hb.get("min_minutes", 1),
             max_minutes=hb.get("max_minutes", 10),
             creative_threshold=hb.get("creative_threshold", 0.55),
+            adaptive=hb.get("adaptive", True),
+            fast_min=hb.get("fast_min", 1.0),
+            fast_max=hb.get("fast_max", 3.0),
+            slow_min=hb.get("slow_min", 7.0),
+            slow_max=hb.get("slow_max", 15.0),
         ),
         association_tree=AssociationTreeConfig(
             branching_factor=tree.get("branching_factor", 3),
@@ -191,6 +214,15 @@ def load_config(config_path: str | Path | None = None) -> EngineConfig:
                 vad_threshold=aud.get("vad_threshold", 0.003),
                 base_weight_direct=aud.get("base_weight_direct", 1.0),
                 base_weight_overheard=aud.get("base_weight_overheard", 0.25),
+            ),
+            screen=ScreenConfig(
+                enabled=scr.get("enabled", True),
+                base_weight=scr.get("base_weight", 0.30),
+                history_window=scr.get("history_window", 10),
+                screenshot_enabled=scr.get("screenshot_enabled", True),
+                min_novelty_for_screenshot=scr.get("min_novelty_for_screenshot", 0.5),
+                excluded_apps=scr.get("excluded_apps", []),
+                excluded_urls=scr.get("excluded_urls", []),
             ),
         ),
         voice=VoiceOutputConfig(

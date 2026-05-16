@@ -1,8 +1,16 @@
 """
-Audio Channel — Microphone capture with speech transcription and novelty.
+Audio Channel — Microphone capture with speech transcription, novelty, and prosody.
 
 Captures a short audio clip when the heartbeat fires, transcribes it
 using OpenAI Whisper, and computes novelty vs recent transcripts.
+
+PROSODY: After capture, analyzes the audio signal for emotional intensity:
+  - RMS energy variance (loud = animated)
+  - Pitch variance (monotone = bored, varied = excited)
+  - Speech rate (fast = energized, slow = calm)
+  
+High emotional intensity boosts the channel weight so creative interjections
+land when the user is "in the flow" rather than during a lull.
 
 Does NOT stream continuously — only listens when the engine is "paying attention."
 """
@@ -12,10 +20,32 @@ from __future__ import annotations
 import io
 import os
 from collections import deque
+from dataclasses import dataclass
 
 import numpy as np
 
 from src.models import ChannelInput
+
+
+@dataclass
+class ProsodyFeatures:
+    """Extracted emotion/energy features from audio signal."""
+    rms_energy: float = 0.0         # overall loudness (0-1 normalized)
+    energy_variance: float = 0.0    # how much loudness fluctuates (animated speech)
+    pitch_variance: float = 0.0     # monotone (0) vs melodic (1)
+    speech_rate: float = 0.0        # syllables-per-second estimate (0-1 normalized)
+    intensity: float = 0.0          # composite emotion score (0=flat, 1=very excited)
+
+    @property
+    def label(self) -> str:
+        if self.intensity > 0.7:
+            return "🔥 EXCITED"
+        elif self.intensity > 0.4:
+            return "⚡ ENGAGED"
+        elif self.intensity > 0.2:
+            return "😐 NEUTRAL"
+        else:
+            return "😴 CALM"
 
 
 class AudioChannel:
@@ -43,6 +73,7 @@ class AudioChannel:
         self._initialized = False
         self._whisper_client = None
         self.paused = False
+        self._last_prosody: ProsodyFeatures = ProsodyFeatures()
 
     @staticmethod
     def list_devices() -> list[dict]:
@@ -280,6 +311,66 @@ class AudioChannel:
         max_similarity = max(similarities)
         return max(0.0, min(1.0, 1.0 - max_similarity))
 
+    def analyze_prosody(self, audio: np.ndarray) -> ProsodyFeatures:
+        """Extract emotion/prosody features from raw audio signal.
+
+        Uses signal-level heuristics that work without ML models:
+        - RMS energy and its frame-to-frame variance
+        - Zero-crossing rate as a pitch proxy
+        - Segment density for speech rate estimation
+        """
+        if audio is None or len(audio) < self.sample_rate * 0.3:
+            return ProsodyFeatures()
+
+        audio_f = audio.astype(np.float64)
+
+        # --- RMS energy (overall and variance across 50ms frames) ---
+        frame_size = int(self.sample_rate * 0.05)
+        n_frames = len(audio_f) // frame_size
+        if n_frames < 2:
+            return ProsodyFeatures()
+
+        frames = audio_f[:n_frames * frame_size].reshape(n_frames, frame_size)
+        frame_rms = np.sqrt(np.mean(frames ** 2, axis=1))
+
+        rms_energy = float(np.mean(frame_rms))
+        energy_variance = float(np.std(frame_rms))
+        rms_normalized = min(1.0, rms_energy / 0.08)
+        energy_var_normalized = min(1.0, energy_variance / 0.04)
+
+        # --- Pitch proxy via zero-crossing rate variance ---
+        signs = np.sign(audio_f)
+        zero_crossings = np.abs(np.diff(signs)) / 2
+        zc_frames = zero_crossings[:n_frames * frame_size - 1].reshape(n_frames, frame_size - 1)
+        zcr_per_frame = np.sum(zc_frames, axis=1) / frame_size
+        pitch_variance = float(np.std(zcr_per_frame))
+        pitch_var_normalized = min(1.0, pitch_variance / 0.05)
+
+        # --- Speech rate proxy: voiced segment density ---
+        speech_frames = frame_rms > self.vad_threshold
+        speech_ratio = float(np.mean(speech_frames))
+        transitions = np.sum(np.abs(np.diff(speech_frames.astype(int))))
+        duration = len(audio_f) / self.sample_rate
+        segments_per_second = transitions / (2 * duration) if duration > 0 else 0
+        speech_rate_normalized = min(1.0, segments_per_second / 4.0)
+
+        # --- Composite intensity ---
+        intensity = (
+            0.25 * rms_normalized
+            + 0.30 * energy_var_normalized
+            + 0.25 * pitch_var_normalized
+            + 0.20 * speech_rate_normalized
+        )
+        intensity = max(0.0, min(1.0, intensity))
+
+        return ProsodyFeatures(
+            rms_energy=rms_normalized,
+            energy_variance=energy_var_normalized,
+            pitch_variance=pitch_var_normalized,
+            speech_rate=speech_rate_normalized,
+            intensity=intensity,
+        )
+
     async def quick_capture_and_transcribe(self) -> str:
         """
         Capture audio and transcribe in one step. Used by the background listener.
@@ -299,7 +390,9 @@ class AudioChannel:
 
     async def process(self) -> ChannelInput:
         """
-        Full audio pipeline: capture → detect speech → transcribe → novelty.
+        Full audio pipeline: capture → detect speech → transcribe → novelty → prosody.
+        Prosody intensity boosts effective_weight so the engine pays more attention
+        when the user sounds excited/animated.
         """
         if not self._available:
             return ChannelInput(
@@ -347,11 +440,17 @@ class AudioChannel:
             )
 
         novelty = self.compute_novelty(transcript)
+        prosody = self.analyze_prosody(audio)
+        self._last_prosody = prosody
+
+        # Boost weight when user sounds excited: up to 1.5x at max intensity
+        emotion_boost = 1.0 + 0.5 * prosody.intensity
         base_weight = self.base_weight_overheard
-        effective_weight = base_weight * novelty
+        effective_weight = base_weight * novelty * emotion_boost
 
         novelty_label = "🔴 HIGH" if novelty > 0.6 else "🟡 MED" if novelty > 0.3 else "⚪ LOW"
         print(f"   [Audio] Audio [{novelty_label} novelty={novelty:.2f}]: \"{transcript[:80]}\"")
+        print(f"   [Audio] Prosody: {prosody.label} (intensity={prosody.intensity:.2f}, boost={emotion_boost:.2f}x)")
 
         return ChannelInput(
             channel="audio",

@@ -13,6 +13,7 @@ from datetime import datetime
 from src.config.llm_adapter import LLMAdapter
 from src.input_pipeline.vision import VisionChannel
 from src.input_pipeline.audio import AudioChannel
+from src.input_pipeline.screen import ScreenChannel
 from src.models import ContextSnapshot, ChannelInput
 
 
@@ -26,12 +27,15 @@ Rules:
 - Extract specific, interesting topics — not vague descriptions
 - If vision shows something new and interesting, prioritize that
 - If audio captured something the user said, incorporate that
+- If the user sounds excited or animated, lean into whatever they're engaged with
+- The screen context shows what they're actively working on digitally
 - The text context is what the user told you they're doing
 
 Return ONLY 1-2 seed topics as a short phrase (under 15 words). Examples:
 - "building contractor scheduling software with drag-and-drop calendar"
 - "person at desk with a new book about space exploration"
 - "cooking pasta while talking about weekend plans"
+- "excitedly debugging a WebSocket race condition in real-time chat"
 
 Return just the phrase, nothing else."""
 
@@ -42,12 +46,14 @@ class ContextAssembler:
         llm: LLMAdapter,
         vision: VisionChannel | None = None,
         audio: AudioChannel | None = None,
+        screen: ScreenChannel | None = None,
         text_base_weight: float = 0.40,
         skip_threshold: float = 0.15,
     ):
         self.llm = llm
         self.vision = vision
         self.audio = audio
+        self.screen = screen
         self.text_base_weight = text_base_weight
         self.skip_threshold = skip_threshold
         self._last_user_text = ""
@@ -65,6 +71,8 @@ class ContextAssembler:
             sensors.append("Camera")
         if self.audio and self.audio.is_available:
             sensors.append(f"Mic ({self.audio.capture_seconds:.0f}s)")
+        if self.screen and self.screen.is_available:
+            sensors.append("Screen")
 
         if sensors:
             sensor_list = " + ".join(sensors)
@@ -86,6 +94,11 @@ class ContextAssembler:
         if self.audio and self.audio.is_available:
             audio_input = await self.audio.process()
 
+        # ── Screen channel ──
+        screen_input = None
+        if self.screen and self.screen.is_available:
+            screen_input = await self.screen.process(llm=self.llm)
+
         # ── Text channel ──
         text_novelty = self._compute_text_novelty(user_text)
         text_weight = self.text_base_weight * text_novelty
@@ -106,6 +119,8 @@ class ContextAssembler:
             channels.append(vision_input)
         if audio_input and audio_input.available:
             channels.append(audio_input)
+        if screen_input and screen_input.available:
+            channels.append(screen_input)
         if text_input.available:
             channels.append(text_input)
 
@@ -129,10 +144,12 @@ class ContextAssembler:
             (vision_input and vision_input.raw_content and vision_input.novelty > 0.3)
             or (audio_input and audio_input.raw_content and audio_input.novelty > 0.3
                 and audio_input.raw_content not in ("[silence]", "[capture failed]", "[transcription empty]"))
+            or (screen_input and screen_input.raw_content and screen_input.novelty > 0.3
+                and screen_input.raw_content not in ("[private/excluded window]",))
         )
 
         if has_rich_input:
-            seed_topic = await self._extract_seed_topic(vision_input, audio_input, text_input)
+            seed_topic = await self._extract_seed_topic(vision_input, audio_input, text_input, screen_input)
         else:
             seed_topic = user_text or "general exploration"
 
@@ -148,6 +165,7 @@ class ContextAssembler:
             seed_topic=seed_topic,
             vision=vision_input,
             audio=audio_input,
+            screen=screen_input,
             text=text_input,
             dominant_channel=dominant.channel,
             overall_novelty=overall_novelty,
@@ -159,13 +177,21 @@ class ContextAssembler:
         vision: ChannelInput | None,
         audio: ChannelInput | None,
         text: ChannelInput,
+        screen: ChannelInput | None = None,
     ) -> str:
         """Use the LLM to synthesize a seed topic from all available channels."""
         parts = []
         if vision and vision.raw_content and vision.available:
             parts.append(f"VISION (novelty={vision.novelty:.2f}): {vision.raw_content}")
         if audio and audio.raw_content and audio.available and audio.raw_content not in ("[silence]",):
-            parts.append(f"AUDIO (novelty={audio.novelty:.2f}): {audio.raw_content}")
+            emotion_tag = ""
+            if self.audio and hasattr(self.audio, '_last_prosody'):
+                prosody = self.audio._last_prosody
+                if prosody.intensity > 0.4:
+                    emotion_tag = f" [USER SOUNDS {prosody.label}]"
+            parts.append(f"AUDIO (novelty={audio.novelty:.2f}): {audio.raw_content}{emotion_tag}")
+        if screen and screen.raw_content and screen.available:
+            parts.append(f"SCREEN (novelty={screen.novelty:.2f}): {screen.raw_content}")
         if text.raw_content and text.available:
             parts.append(f"TEXT CONTEXT (novelty={text.novelty:.2f}): {text.raw_content}")
 

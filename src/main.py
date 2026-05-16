@@ -23,6 +23,7 @@ from src.bridge_builder.builder import BridgeBuilder
 from src.search.web_search import WebSearcher
 from src.input_pipeline.vision import VisionChannel
 from src.input_pipeline.audio import AudioChannel
+from src.input_pipeline.screen import ScreenChannel
 from src.input_pipeline.assembler import ContextAssembler
 from src.input_pipeline.address_detector import AddressDetector
 from src.conversation.responder import DirectResponder
@@ -46,6 +47,11 @@ class CreativityEngine:
         self.heartbeat = Heartbeat(
             min_minutes=self.cfg.heartbeat.min_minutes,
             max_minutes=self.cfg.heartbeat.max_minutes,
+            adaptive=self.cfg.heartbeat.adaptive,
+            fast_min=self.cfg.heartbeat.fast_min,
+            fast_max=self.cfg.heartbeat.fast_max,
+            slow_min=self.cfg.heartbeat.slow_min,
+            slow_max=self.cfg.heartbeat.slow_max,
         )
         self.embedder = EmbeddingProvider(EmbeddingConfig(
             provider=self.cfg.embeddings.provider,
@@ -65,6 +71,7 @@ class CreativityEngine:
         self._force_creative = False
         self.vision: VisionChannel | None = None
         self.audio: AudioChannel | None = None
+        self.screen: ScreenChannel | None = None
         self.assembler: ContextAssembler | None = None
         self.detector: AddressDetector = AddressDetector(llm=self.llm)
         self.responder: DirectResponder = DirectResponder(llm=self.llm)
@@ -106,12 +113,26 @@ class CreativityEngine:
         if ip.audio.enabled:
             self.audio.initialize()
 
+        self.screen = ScreenChannel(
+            base_weight=ip.screen.base_weight,
+            history_window=ip.screen.history_window,
+            screenshot_enabled=ip.screen.screenshot_enabled,
+            min_novelty_for_screenshot=ip.screen.min_novelty_for_screenshot,
+            excluded_apps=ip.screen.excluded_apps,
+            excluded_urls=ip.screen.excluded_urls,
+        )
+        if ip.screen.enabled:
+            self.screen.initialize()
+
         self.assembler = ContextAssembler(
             llm=self.llm,
             vision=self.vision if self.vision.is_available else None,
             audio=self.audio if self.audio.is_available else None,
+            screen=self.screen if self.screen.is_available else None,
         )
-        self._multimodal = self.vision.is_available or self.audio.is_available
+        self._multimodal = (
+            self.vision.is_available or self.audio.is_available or self.screen.is_available
+        )
         if self._multimodal:
             print("   Multimodal input enabled!")
         else:
@@ -323,6 +344,8 @@ class CreativityEngine:
         threshold = self.cfg.heartbeat.creative_threshold
         go_creative = ctx.overall_novelty >= threshold or self._force_creative
         self._force_creative = False
+
+        self.heartbeat.adjust_tempo(ctx.overall_novelty)
 
         if go_creative:
             print(f"   >> Novelty {ctx.overall_novelty:.2f} >= {threshold} — CREATIVE MODE")
@@ -806,6 +829,7 @@ class CreativityEngine:
                 print(f"      Context: \"{self.current_context}\"")
                 print(f"      Heartbeats fired: {self.heartbeat.beat_count}")
                 print(f"      Next heartbeat: ~{mins}m {secs}s")
+                print(f"      Tempo: {self.heartbeat.tempo_info}")
                 print(f"      Past topics: {len(self.past_topics)}")
                 print(f"      Overheard buffer: {len(self._overheard_buffer)} items")
                 print(f"      Conversation turns: {len(self.responder.history)}")

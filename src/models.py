@@ -132,6 +132,7 @@ class ContextSnapshot:
     # Individual channel data
     vision: ChannelInput | None = None
     audio: ChannelInput | None = None
+    screen: ChannelInput | None = None
     text: ChannelInput | None = None
 
     # Composite scores
