@@ -45,6 +45,12 @@ class StoredChain:
     context_at_time: str = ""
     rescore_count: int = 0
     last_rescore: float = 0.0
+    # Individual scoring metrics (for creativity self-evaluation)
+    score_semantic_distance: float = 0.0
+    score_domain_crossings: float = 0.0
+    score_surprise: float = 0.0
+    score_bridgeability: float = 0.0
+    score_novelty: float = 0.0
 
     def to_metadata(self) -> dict:
         """Convert to ChromaDB metadata dict (no nested objects allowed)."""
@@ -62,6 +68,11 @@ class StoredChain:
             "context_at_time": self.context_at_time,
             "rescore_count": self.rescore_count,
             "last_rescore": self.last_rescore,
+            "score_semantic_distance": self.score_semantic_distance,
+            "score_domain_crossings": self.score_domain_crossings,
+            "score_surprise": self.score_surprise,
+            "score_bridgeability": self.score_bridgeability,
+            "score_novelty": self.score_novelty,
         }
 
     @classmethod
@@ -82,6 +93,11 @@ class StoredChain:
             context_at_time=meta.get("context_at_time", ""),
             rescore_count=meta.get("rescore_count", 0),
             last_rescore=meta.get("last_rescore", 0.0),
+            score_semantic_distance=meta.get("score_semantic_distance", 0.0),
+            score_domain_crossings=meta.get("score_domain_crossings", 0.0),
+            score_surprise=meta.get("score_surprise", 0.0),
+            score_bridgeability=meta.get("score_bridgeability", 0.0),
+            score_novelty=meta.get("score_novelty", 0.0),
         )
 
 
@@ -170,8 +186,13 @@ class MemoryStore:
         interjection_text: str = "",
         context: str = "",
         status: str = "fired",
+        score_semantic_distance: float = 0.0,
+        score_domain_crossings: float = 0.0,
+        score_surprise: float = 0.0,
+        score_bridgeability: float = 0.0,
+        score_novelty: float = 0.0,
     ) -> None:
-        """Store a chain in persistent memory with its embedding."""
+        """Store a chain in persistent memory with its embedding and full scoring breakdown."""
         if not self._available or not self._collection:
             return
 
@@ -186,6 +207,11 @@ class MemoryStore:
             interjection_text=interjection_text,
             status=status,
             context_at_time=context,
+            score_semantic_distance=score_semantic_distance,
+            score_domain_crossings=score_domain_crossings,
+            score_surprise=score_surprise,
+            score_bridgeability=score_bridgeability,
+            score_novelty=score_novelty,
         )
 
         add_kwargs = {
@@ -403,3 +429,22 @@ class MemoryStore:
             return {k: sum(v) / len(v) for k, v in domain_scores.items() if v}
         except Exception:
             return {}
+
+    def get_all_fired(self, limit: int = 500) -> list[StoredChain]:
+        """Get all fired chains for analytics. Returns up to `limit` chains sorted by timestamp."""
+        if not self._available or not self._collection:
+            return []
+        try:
+            results = self._collection.get(
+                where={"status": "fired"},
+                limit=limit,
+            )
+            chains = []
+            if results and results["ids"]:
+                for i, chain_id in enumerate(results["ids"]):
+                    meta = results["metadatas"][i] if results["metadatas"] else {}
+                    chains.append(StoredChain.from_metadata(chain_id, meta))
+            chains.sort(key=lambda c: c.timestamp)
+            return chains
+        except Exception:
+            return []

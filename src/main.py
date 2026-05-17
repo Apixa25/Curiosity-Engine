@@ -34,6 +34,7 @@ from src.embeddings.provider import EmbeddingProvider, EmbeddingConfig
 from src.memory.store import MemoryStore, MemoryConfig
 from src.memory.incubation import IncubationQueue
 from src.memory.profile import ProfileBuilder
+from src.memory.analytics import CreativityAnalytics
 from src.models import ContextSnapshot, Interjection
 
 
@@ -81,6 +82,7 @@ class CreativityEngine:
         self.responder: DirectResponder = DirectResponder(llm=self.llm)
         self.cocreator: CoCreator = CoCreator(llm=self.llm)
         self._last_interjection: Interjection | None = None
+        self._transparency = False
         self.voice: VoiceOutput = VoiceOutput(VoiceConfig(
             enabled=self.cfg.voice.enabled,
             model=self.cfg.voice.model,
@@ -110,6 +112,7 @@ class CreativityEngine:
             profile_path=self.cfg.memory.persist_directory + "/user_profile.json",
             rebuild_every_n_ratings=self.cfg.memory.profile_rebuild_every,
         )
+        self.analytics = CreativityAnalytics(memory=self.memory)
         self._overheard_buffer: list[str] = []
 
     def enable_multimodal(self) -> None:
@@ -237,7 +240,7 @@ class CreativityEngine:
             self._thinking = False
 
     def _store_fired_chain(self, chain, score, interjection, seed_topic: str) -> None:
-        """Persist the fired chain in long-term memory."""
+        """Persist the fired chain in long-term memory with full scoring breakdown."""
         if not self.memory.is_available:
             return
 
@@ -257,6 +260,11 @@ class CreativityEngine:
             interjection_text=interjection.interjection_text if interjection else "",
             context=self.current_context,
             status="fired",
+            score_semantic_distance=score.semantic_distance,
+            score_domain_crossings=score.domain_crossings,
+            score_surprise=score.surprise,
+            score_bridgeability=score.bridgeability,
+            score_novelty=score.novelty,
         )
 
     def _incubate_chains(self, ranked_chains, seed_topic: str) -> None:
@@ -363,6 +371,9 @@ class CreativityEngine:
         print("     'rate 1-5'          → Rate last interjection (1=terrible, 5=amazing)")
         print("     'build on that'     → Start brainstorming together (co-creation mode)")
         print("     'done'              → End brainstorm, back to normal")
+        print("     'reveal'            → Show the full causal chain behind last interjection")
+        print("     'transparency'      → Auto-show causal chains (toggle on/off)")
+        print("     'stats'             → Creativity metrics and AHA! rate over time")
         print("     'quit'              → Shut down")
         print(f"{'─' * 70}")
 
@@ -480,6 +491,8 @@ class CreativityEngine:
             print(f"   \"{interjection.interjection_text}\"")
             print(f"\n{'═' * 70}")
             self._print_citations(interjection)
+            if self._transparency:
+                self._print_causal_chain(interjection)
             self.responder.add_engine_interjection(interjection.interjection_text)
             await self._speak(interjection.interjection_text)
         else:
@@ -981,6 +994,24 @@ class CreativityEngine:
                     self._force_creative = True
                     self.heartbeat._remaining_seconds = 0
 
+            elif cmd in ("reveal", "show chain", "causation", "why"):
+                if self._last_interjection:
+                    self._print_causal_chain(self._last_interjection)
+                else:
+                    print("   ❌ No interjection to reveal yet")
+
+            elif cmd in ("transparency", "transparency on", "debug on"):
+                self._transparency = True
+                print("   🔮 Transparency ON — causal chains will be shown after every interjection")
+                print("   (The illusion of spontaneity dissolves. You see the machinery now.)")
+
+            elif cmd in ("transparency off", "debug off", "magic"):
+                self._transparency = False
+                print("   ✨ Transparency OFF — back to the illusion of spontaneous thought")
+
+            elif cmd == "stats":
+                await self._show_creativity_stats()
+
             elif cmd in ("👍", "good", "like", "thumbs up", "nice"):
                 if self.memory.rate_last_interjection(5):
                     print("   ⭐ Rated last interjection 5/5 — I'll remember you liked that!")
@@ -1098,6 +1129,83 @@ class CreativityEngine:
         if interjection.search_sources:
             for url in interjection.search_sources[:5]:
                 print(f"   📎 {url}")
+
+    def _print_causal_chain(self, interjection: Interjection) -> None:
+        """Transparency mode: reveal the full causal chain that produced this interjection.
+
+        This proves the core thesis — every 'creative' output has a deterministic
+        causal chain behind it. Hidden, it feels like spontaneous thought.
+        Revealed, you see the machinery. Same output, different experience.
+        """
+        print(f"\n{'─' * 70}")
+        print(f"🔮 CAUSAL CHAIN REVEALED (transparency mode)")
+        print(f"{'─' * 70}")
+
+        chain = interjection.chain
+        scoring = interjection.scoring
+        ctx = interjection.context
+
+        print(f"   ┌─ TRIGGER")
+        print(f"   │  Heartbeat #{interjection.heartbeat_id} fired")
+        if ctx and ctx.dominant_channel:
+            print(f"   │  Dominant input: {ctx.dominant_channel} (novelty: {ctx.overall_novelty:.2f})")
+        print(f"   │")
+
+        print(f"   ├─ SEED TOPIC")
+        print(f"   │  \"{ctx.seed_topic if ctx else 'unknown'}\"")
+        print(f"   │")
+
+        if chain and chain.nodes:
+            print(f"   ├─ ASSOCIATION CHAIN ({len(chain.nodes)} hops, {chain.domain_crossings} domain crossings)")
+            for i, node in enumerate(chain.nodes):
+                connector = "│  " if i < len(chain.nodes) - 1 else "│  "
+                arrow = "→" if i > 0 else "●"
+                domain_tag = f"  [{node.domain}]" if i == 0 or node.domain != chain.nodes[i-1].domain else ""
+                print(f"   │  {arrow} {node.topic}{domain_tag}")
+                if i > 0 and node.connection_reason:
+                    print(f"   │    ↳ why: {node.connection_reason[:70]}")
+            if chain.total_semantic_distance > 0:
+                print(f"   │  Embedding distance (seed→endpoint): {chain.total_semantic_distance:.3f}")
+            print(f"   │")
+
+        if scoring:
+            print(f"   ├─ SCORING BREAKDOWN")
+            print(f"   │  semantic_distance : {scoring.semantic_distance:.3f} (×0.30 = {scoring.semantic_distance * 0.30:.3f})")
+            print(f"   │  domain_crossings  : {scoring.domain_crossings:.3f} (×0.25 = {scoring.domain_crossings * 0.25:.3f})")
+            print(f"   │  surprise          : {scoring.surprise:.3f} (×0.20 = {scoring.surprise * 0.20:.3f})")
+            print(f"   │  bridgeability     : {scoring.bridgeability:.3f} (×0.15 = {scoring.bridgeability * 0.15:.3f})")
+            print(f"   │  novelty           : {scoring.novelty:.3f} (×0.10 = {scoring.novelty * 0.10:.3f})")
+            print(f"   │  TOTAL             : {scoring.total:.3f}")
+            print(f"   │")
+
+        personality = self.bridge._last_personality
+        if personality:
+            print(f"   ├─ PERSONALITY SELECTED")
+            print(f"   │  {personality.emoji} {personality.name}: {personality.description}")
+            print(f"   │")
+
+        print(f"   └─ OUTPUT")
+        print(f"      \"{interjection.interjection_text[:100]}{'...' if len(interjection.interjection_text) > 100 else ''}\"")
+        print(f"\n   💡 The causation is complex. The output feels spontaneous.")
+        print(f"      That's the whole point.")
+        print(f"{'─' * 70}")
+
+    async def _show_creativity_stats(self) -> None:
+        """Display the creativity self-evaluation report."""
+        if not self.memory.is_available:
+            print("   ❌ Memory not available — stats require ChromaDB")
+            return
+
+        report = self.analytics.generate_report()
+        print(self.analytics.format_report(report))
+
+        if report.total_interjections >= 5:
+            session_report = self.analytics.generate_report(hours=1)
+            if session_report.total_interjections >= 2:
+                print(f"\n   📊 THIS SESSION ({session_report.period_label}):")
+                print(f"   │  {session_report.total_interjections} interjections, "
+                      f"{session_report.aha_count} AHA! moments ({session_report.aha_rate:.1f}%)")
+                print(f"   │  Avg score: {session_report.avg_score:.3f}")
 
     async def run_single(self, seed_topic: str) -> None:
         """Fire a single heartbeat cycle — for testing and demos."""

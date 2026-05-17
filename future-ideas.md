@@ -88,9 +88,71 @@ After the desktop widget exists (images need somewhere to display). Also after t
 
 ---
 
+## 🚶 Mobile / Walk Mode
+
+**Status:** Deferred — start with laptop walk mode using existing features
+
+**The Vision:**
+Creativity loves movement. The engine should be able to come with you on walks, where your changing environment becomes a constant stream of fresh input. Steve Jobs walked. Nietzsche walked. Your best ideas probably happen in the shower or on a walk — this mode would capture that.
+
+**Phase 1: Laptop Walk Mode (near-term)**
+Use what we already have — just in a different context:
+- **Existing mic input** becomes ambient sound capture while walking (birds, traffic, music)
+- **Screen context** shows whatever's on screen (podcast app, music player, map)
+- **Shorter heartbeat interval** (1-2 min) because input changes faster when moving
+- **Audio-only output** via TTS — you're walking, not reading a screen
+- **Emotion/prosody detection** picks up your energy level from ambient sounds and responses
+- **Config preset:** `python -m src.main --live --walk` activates walk-optimized settings:
+  - Fast heartbeat (1-2 min cycles)
+  - Voice output forced ON
+  - Higher novelty sensitivity
+  - Audio input sensitivity boosted
+
+**Phase 2: Phone Companion (far-future)**
+Full mobile experience using the phone's sensors:
+- **Phone mic** for ambient audio and voice interaction
+- **Phone camera** for visual context (what you're seeing on your walk)
+- **GPS/location** for geo-aware seeds ("You're near the waterfront → water-based associations")
+- **Step counter / movement detection** for activity-aware heartbeat pacing
+- **Push notifications** for interjections when the phone is locked
+
+**Implementation Ideas (Phase 2):**
+- Lightweight phone app (React Native or Flutter) that streams sensor data to the engine
+- Engine runs on laptop/home server, phone is a thin client
+- WebSocket connection between phone and engine
+- Alternatively: fully local phone version using a smaller LLM (Phi-3, Gemma)
+
+**Key Libraries (Phase 1 — already have most of these):**
+- Existing `AudioChannel` — already handles mic input
+- Existing `VoiceOutput` — TTS for hands-free output
+- Existing `ScreenChannel` — captures whatever's on screen
+- New: CLI preset flag (`--walk`) that configures optimal walk settings
+
+**Key Libraries (Phase 2 — future):**
+- React Native / Flutter for mobile app
+- WebSocket server (FastAPI/websockets) for real-time phone→engine streaming
+- `geopy` for location-based context enrichment
+
+**When to Build:**
+- **Phase 1:** Anytime! It's mostly a config preset. Add it when you want to try a walking session.
+- **Phase 2:** After Phase 1 proves walking sessions are genuinely useful. Don't build a phone app for a workflow you haven't validated with a laptop first.
+
+**Watch Out For:**
+- Battery drain on phone (constant mic + camera + GPS is heavy)
+- Privacy: outdoor camera captures other people — need clear opt-in and no cloud storage
+- Audio quality: wind noise, traffic, etc. — may need noise gate before processing
+- Walking pace: interjections need to be SHORT in walk mode — can't process paragraphs while walking
+
+**The Philosophy:**
+This connects to the core thesis: creativity comes from the collision of ideas across contexts. Walking literally changes your context every few minutes. The engine + movement = maximum collision potential. 🚶‍♂️💡
+
+---
+
 ## 📝 Notes
 
-- Both features build on the desktop widget — that's the natural unlock point
+- Both desktop widget and image generation build on each other — that's the natural unlock point
 - Image generation could also be a co-creation feature: "show me what that looks like"
 - Consider ElevenLabs for premium voice variety (different from OpenAI TTS voices)
 - The overlay widget could eventually show the incubation queue as a "thoughts percolating" animation
+- Walk mode Phase 1 could be built THIS WEEK — it's mostly just a CLI preset
+- Walk mode proves the thesis that changing physical context accelerates creative associations
