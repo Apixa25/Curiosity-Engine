@@ -73,6 +73,7 @@ class AssociationChain:
     domain_crossings: int = 0
     interest_score: float | None = None
     bridge_sentence: str | None = None
+    metadata: dict | None = None
 
     @property
     def endpoint(self) -> AssociationNode:

@@ -164,8 +164,18 @@ class AssociationTreeGenerator:
         self._dt_min_crossings = deep_thought_min_domain_crossings
         self._dt_temp_boost = deep_thought_temperature_boost
         self._dt_invert_efficiency = deep_thought_invert_efficiency
+        self._backward_mode = False
+        self._backward_problem = ""
 
-    async def generate_tree(self, seed_topic: str, seed_domain: str = "General") -> list[AssociationChain]:
+    async def generate_tree(
+        self,
+        seed_topic: str,
+        seed_domain: str = "General",
+        max_depth: int | None = None,
+        keep_per_level: int | None = None,
+        min_domain_crossings: int | None = None,
+        mode_label: str | None = None,
+    ) -> list[AssociationChain]:
         """
         Generate a branching association tree from a seed topic.
         Uses depth-first pruning: at each level, keep only the top branches.
@@ -178,12 +188,13 @@ class AssociationTreeGenerator:
 
         Returns completed chains sorted by preliminary quality.
         """
-        max_depth = self._dt_max_depth if self._deep_thought else self.cfg.max_depth
-        keep = self._dt_keep if self._deep_thought else self.cfg.keep_per_level
-        min_crossings = self._dt_min_crossings if self._deep_thought else self.cfg.min_domain_crossings
+        max_depth = max_depth or (self._dt_max_depth if self._deep_thought else self.cfg.max_depth)
+        keep = keep_per_level or (self._dt_keep if self._deep_thought else self.cfg.keep_per_level)
+        min_crossings = min_domain_crossings or (self._dt_min_crossings if self._deep_thought else self.cfg.min_domain_crossings)
 
-        mode_label = "🔮 DEEP THOUGHT" if self._deep_thought else "🌳"
-        if self._deep_thought:
+        if mode_label is None:
+            mode_label = "🔮 DEEP THOUGHT" if self._deep_thought else "🌳"
+        if self._deep_thought or self._backward_mode:
             print(f"   {mode_label} mode: depth={max_depth}, keep={keep}, min_crossings={min_crossings}")
 
         root = AssociationNode(
@@ -322,6 +333,7 @@ class AssociationTreeGenerator:
     async def _expand_node(self, node: AssociationNode, seed_topic: str, depth: int) -> list[AssociationNode]:
         """Generate child associations for a single node.
 
+        In backward mode: works backward from a problem toward root causes.
         In Deep Thought mode: uses psychedelic-style prompts that force
         butterfly-effect reasoning, cross-scale jumps, and hidden mechanism
         chains. Temperature is boosted for more entropy.
@@ -329,6 +341,40 @@ class AssociationTreeGenerator:
         chain_so_far = " → ".join(node.chain_topics())
         domains_str = ", ".join(DOMAINS)
         n = self.cfg.branching_factor
+
+        if self._backward_mode:
+            from src.problems.stuck_queue import BACKWARD_SYSTEM, BACKWARD_HOP1_TEMPLATE, BACKWARD_HOP_TEMPLATE
+            system = BACKWARD_SYSTEM
+            temperature = min(1.5, 0.9 + self._dt_temp_boost)
+
+            if depth == 1:
+                prompt = BACKWARD_HOP1_TEMPLATE.format(
+                    problem=self._backward_problem,
+                    n=n,
+                    domains=domains_str,
+                )
+            else:
+                prompt = BACKWARD_HOP_TEMPLATE.format(
+                    problem=self._backward_problem,
+                    chain_so_far=chain_so_far,
+                    current_domain=node.domain,
+                    current_topic=node.topic,
+                    n=n,
+                    domains=domains_str,
+                )
+
+            raw = await self.llm.generate_json(prompt, system=system, temperature=temperature)
+            children = []
+            if isinstance(raw, list):
+                for item in raw:
+                    if isinstance(item, dict) and "topic" in item:
+                        children.append(AssociationNode(
+                            topic=item["topic"],
+                            domain=item.get("domain", "Unknown"),
+                            connection_reason=item.get("connection_reason", ""),
+                            depth=depth,
+                        ))
+            return children
 
         if self._deep_thought:
             system = DEEP_THOUGHT_SYSTEM

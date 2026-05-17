@@ -215,6 +215,70 @@ class CollisionEngine:
             seed_b_label=label_b,
         )
 
+    async def detect_problem_collisions(
+        self,
+        forward_chains: dict[str, list[AssociationChain]],
+        forward_sources: dict[str, str],
+        backward_chains: dict[str, list[AssociationChain]],
+        max_collisions: int = 3,
+    ) -> list[CollisionResult]:
+        """Detect collisions between forward (ambient) and backward (problem) chains.
+
+        This is the Harman/Fadiman moment: forward chains come from what you're
+        doing RIGHT NOW (ambient context, random memory, etc). Backward chains
+        come from the PROBLEM you've been stuck on. When they collide, it means
+        your current daily activity has accidentally touched a hidden path toward
+        solving your problem.
+
+        Returns CollisionResults with:
+        - chain_a = the forward chain (from ambient context)
+        - chain_b = the backward chain (from the problem)
+        - seed_a_label = the forward seed source
+        - seed_b_label = "backward:<problem>"
+        """
+        forward_pool = self._collect_intermediate_nodes(forward_chains)
+        backward_pool = self._collect_intermediate_nodes(backward_chains)
+
+        if not forward_pool or not backward_pool:
+            return []
+
+        collisions = []
+        for fwd_label, fwd_nodes in forward_pool.items():
+            for bwd_label, bwd_nodes in backward_pool.items():
+                for node_fwd, chain_fwd in fwd_nodes:
+                    for node_bwd, chain_bwd in bwd_nodes:
+                        if node_fwd.embedding is None or node_bwd.embedding is None:
+                            continue
+                        sim = cosine_similarity(node_fwd.embedding, node_bwd.embedding)
+                        if sim >= self.threshold:
+                            collisions.append({
+                                "node_a": node_fwd,
+                                "chain_a": chain_fwd,
+                                "label_a": fwd_label,
+                                "node_b": node_bwd,
+                                "chain_b": chain_bwd,
+                                "label_b": bwd_label,
+                                "similarity": sim,
+                            })
+
+        if not collisions:
+            return []
+
+        collisions.sort(key=lambda x: x["similarity"], reverse=True)
+        top_candidates = collisions[:max_collisions]
+
+        results = []
+        for candidate in top_candidates:
+            collision = await self._build_collision_result(
+                candidate,
+                {**forward_chains, **backward_chains},
+                {**forward_sources, **{k: k for k in backward_chains}},
+            )
+            if collision:
+                results.append(collision)
+
+        return results
+
     async def _synthesize_concept(
         self,
         node_a: AssociationNode,

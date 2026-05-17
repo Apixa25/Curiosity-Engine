@@ -37,6 +37,7 @@ from src.memory.profile import ProfileBuilder
 from src.memory.analytics import SerendipityAnalytics
 from src.association_engine.multi_seed import MultiSeedGenerator
 from src.association_engine.collision_engine import CollisionEngine
+from src.problems.stuck_queue import StuckQueue
 from src.models import ContextSnapshot, Interjection, CollisionResult
 
 
@@ -120,6 +121,13 @@ class ComputationalSerendipity:
         self.multi_seed: MultiSeedGenerator | None = None
         self.collision_engine: CollisionEngine | None = None
         self._last_collision: CollisionResult | None = None
+        self.stuck_queue: StuckQueue = StuckQueue(
+            llm=self.llm,
+            tree_config=self.cfg.association_tree,
+            dt_config=self.cfg.deep_thought,
+            embedder=self.embedder,
+            persist_path=self.cfg.memory.persist_directory + "/problems.json",
+        )
         if self._deep_thought_active:
             self.multi_seed = MultiSeedGenerator(
                 llm=self.llm,
@@ -303,7 +311,36 @@ class ComputationalSerendipity:
                     if collisions:
                         print(f"   ⚡ Found {len(collisions)} bisociation collision(s)!")
                     else:
-                        print(f"   🌀 No collisions detected — falling back to best single chain")
+                        print(f"   🌀 No forward↔forward collisions")
+
+            # ── STUCK PROBLEM COLLISION DETECTION ─────────────────────────
+            problem_collisions: list[CollisionResult] = []
+            if self.collision_engine and self.stuck_queue.has_problems:
+                backward_chains = self.stuck_queue.get_backward_chains_by_problem()
+                if backward_chains:
+                    if verbose:
+                        print(f"   🎯 Checking forward chains against {len(backward_chains)} stuck problem(s)...")
+
+                    problem_collisions = await self.collision_engine.detect_problem_collisions(
+                        forward_chains=result.seed_chains,
+                        forward_sources=result.seed_sources,
+                        backward_chains=backward_chains,
+                    )
+
+                    if verbose and problem_collisions:
+                        print(f"   🎯⚡ BREAKTHROUGH: {len(problem_collisions)} problem collision(s) found!")
+                        for pc in problem_collisions:
+                            print(f"      → {pc.seed_a_label} ↔ {pc.seed_b_label}: \"{pc.collision_concept}\"")
+
+            # Prioritize problem collisions over ambient collisions
+            if problem_collisions:
+                collisions = problem_collisions
+                for pc in problem_collisions:
+                    if pc.chain_b and pc.chain_b.metadata and "problem_id" in pc.chain_b.metadata:
+                        self.stuck_queue.record_collision(pc.chain_b.metadata["problem_id"])
+
+            if verbose and not collisions and not problem_collisions:
+                print(f"   🌀 No collisions detected — falling back to best single chain")
 
             # ── COLLISION PATH: Score + Hypothesis ───────────────────────
             if collisions:
@@ -549,6 +586,9 @@ class ComputationalSerendipity:
         print("     'deep thought'      → Activate Deep Thought mode (parallel chains, collisions)")
         print("     'normal mode'       → Return to normal creative companion mode")
         print("     'mode'              → Show current creativity mode")
+        print("     'solve <problem>'   → Add a stuck problem (engine works on it in background)")
+        print("     'problems'          → List all active stuck problems")
+        print("     'forget <id>'       → Remove a stuck problem")
         print("     'quit'              → Shut down")
         print(f"{'─' * 70}")
 
@@ -1232,6 +1272,49 @@ class ComputationalSerendipity:
                 mode = "🔮 Deep Thought" if self._deep_thought_active else "🌳 Normal"
                 print(f"   Current mode: {mode}")
                 print(f"   Switch: 'deep thought' or 'normal mode'")
+
+            elif cmd.startswith("solve ") or cmd.startswith("solve:"):
+                problem_desc = cmd.split(" ", 1)[1].strip() if " " in cmd else cmd.split(":", 1)[1].strip()
+                if problem_desc:
+                    problem = self.stuck_queue.add_problem(problem_desc)
+                    print(f"\n   🎯 STUCK PROBLEM REGISTERED: \"{problem_desc}\"")
+                    print(f"   │  ID: {problem.id}")
+                    print(f"   │  The engine will work on this in the background.")
+                    print(f"   │  Forward chains from your daily context will be checked against")
+                    print(f"   │  backward chains generated from this problem.")
+                    print(f"   │  When they collide → breakthrough hypothesis.")
+                    print(f"   │")
+                    print(f"   │  Generating backward chains now...")
+                    chains = await self.stuck_queue.generate_backward_chains(problem)
+                    print(f"   │  ✅ Generated {len(chains)} backward chains from the problem")
+                    print(f"   └─ Problem is now being actively worked on. 🧠")
+                else:
+                    print("   ❌ Usage: solve <problem description>")
+                    print("   Example: solve how to cure colon cancer")
+
+            elif cmd == "problems":
+                active = self.stuck_queue.active_problems
+                if not active:
+                    print("   📋 No active stuck problems")
+                    print("   Add one with: solve <problem description>")
+                else:
+                    print(f"\n   🎯 STUCK PROBLEMS ({len(active)} active):")
+                    for prob in active:
+                        chains_n = len(prob.backward_chains)
+                        age = prob.age_hours
+                        age_str = f"{age:.1f}h" if age < 24 else f"{age/24:.1f}d"
+                        print(f"   │  [{prob.id}] \"{prob.description}\"")
+                        print(f"   │     Age: {age_str} | Backward chains: {chains_n} | Collisions found: {prob.collision_count}")
+                    print(f"   └─ Remove with: forget <problem-id or start of description>")
+
+            elif cmd.startswith("forget "):
+                target = cmd.split(" ", 1)[1].strip()
+                if self.stuck_queue.remove_problem(target):
+                    print(f"   ✅ Problem deactivated: \"{target}\"")
+                    print(f"   It won't be checked against future chains anymore.")
+                else:
+                    print(f"   ❌ No active problem matching \"{target}\"")
+                    print(f"   Use 'problems' to see active problems and their IDs")
 
             elif cmd in ("👍", "good", "like", "thumbs up", "nice"):
                 if self.memory.rate_last_interjection(5):
