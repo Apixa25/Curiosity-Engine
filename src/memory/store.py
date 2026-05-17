@@ -106,6 +106,7 @@ class MemoryConfig:
     enabled: bool = True
     persist_directory: str = "data/memory"
     collection_name: str = "creativity_chains"
+    nodes_collection_name: str = "intermediate_nodes"
     max_similar_results: int = 10
     novelty_similarity_threshold: float = 0.85
 
@@ -122,6 +123,7 @@ class MemoryStore:
         self.cfg = config or MemoryConfig()
         self._client = None
         self._collection = None
+        self._nodes_collection = None
         self._available = False
         self._last_interjection_id: str | None = None
 
@@ -148,9 +150,15 @@ class MemoryStore:
                 metadata={"hnsw:space": "cosine"},
             )
 
+            self._nodes_collection = self._client.get_or_create_collection(
+                name=self.cfg.nodes_collection_name,
+                metadata={"hnsw:space": "cosine"},
+            )
+
             count = self._collection.count()
+            node_count = self._nodes_collection.count()
             self._available = True
-            print(f"   [Memory] ChromaDB ready — {count} chains in memory")
+            print(f"   [Memory] ChromaDB ready — {count} chains, {node_count} intermediate nodes")
             return True
 
         except ImportError:
@@ -448,3 +456,166 @@ class MemoryStore:
             return chains
         except Exception:
             return []
+
+    # ── Cross-Temporal Memory: Intermediate Node Storage ─────────────
+
+    @property
+    def node_count(self) -> int:
+        """Number of intermediate nodes stored for cross-temporal collision detection."""
+        if not self._available or not self._nodes_collection:
+            return 0
+        return self._nodes_collection.count()
+
+    def store_intermediate_nodes(
+        self,
+        chain_id: str,
+        nodes: list,
+        seed_topic: str,
+        context: str = "",
+    ) -> int:
+        """Persist ALL intermediate node embeddings from a chain.
+
+        This is what enables cross-temporal collisions. By storing every
+        intermediate node (not just endpoints), we can detect when a chain
+        generated TODAY passes through the same conceptual region as a chain
+        from weeks ago. The collision is invisible if you only store endpoints.
+
+        Returns the number of nodes stored.
+        """
+        if not self._available or not self._nodes_collection:
+            return 0
+
+        stored_count = 0
+        current_time = time.time()
+
+        for i, node in enumerate(nodes):
+            if node.embedding is None:
+                continue
+            if i == 0 or i == len(nodes) - 1:
+                continue
+
+            node_id = f"{chain_id}_node_{i}"
+            metadata = {
+                "chain_id": chain_id,
+                "topic": node.topic,
+                "domain": node.domain,
+                "connection_reason": node.connection_reason[:200],
+                "depth": node.depth,
+                "node_index": i,
+                "chain_length": len(nodes),
+                "seed_topic": seed_topic,
+                "context": context[:200],
+                "timestamp": current_time,
+            }
+
+            try:
+                self._nodes_collection.upsert(
+                    ids=[node_id],
+                    embeddings=[node.embedding.tolist()],
+                    metadatas=[metadata],
+                    documents=[f"{node.topic} ({node.domain}): {node.connection_reason[:100]}"],
+                )
+                stored_count += 1
+            except Exception:
+                continue
+
+        return stored_count
+
+    def find_cross_temporal_collisions(
+        self,
+        query_embedding: np.ndarray,
+        threshold: float = 0.82,
+        min_age_hours: float = 24.0,
+        max_results: int = 5,
+    ) -> list[dict]:
+        """Find old intermediate nodes that are semantically close to a new node.
+
+        This is the cross-temporal collision query: "has any chain from the PAST
+        passed through this same conceptual region?" If yes, that's a time-gap
+        bisociation — today's thought and last week's thought share a hidden link.
+
+        Returns list of dicts with node metadata + similarity score.
+        """
+        if not self._available or not self._nodes_collection:
+            return []
+
+        node_count = self._nodes_collection.count()
+        if node_count == 0:
+            return []
+
+        cutoff_time = time.time() - (min_age_hours * 3600)
+
+        try:
+            results = self._nodes_collection.query(
+                query_embeddings=[query_embedding.tolist()],
+                n_results=min(max_results * 3, node_count),
+                where={"timestamp": {"$lt": cutoff_time}},
+            )
+
+            if not results or not results["ids"] or not results["ids"][0]:
+                return []
+
+            collisions = []
+            for i, node_id in enumerate(results["ids"][0]):
+                distance = results["distances"][0][i] if results["distances"] else 1.0
+                similarity = 1.0 - distance
+
+                if similarity >= threshold:
+                    meta = results["metadatas"][0][i] if results["metadatas"] else {}
+                    age_hours = (time.time() - meta.get("timestamp", time.time())) / 3600
+                    collisions.append({
+                        "node_id": node_id,
+                        "topic": meta.get("topic", ""),
+                        "domain": meta.get("domain", ""),
+                        "connection_reason": meta.get("connection_reason", ""),
+                        "chain_id": meta.get("chain_id", ""),
+                        "seed_topic": meta.get("seed_topic", ""),
+                        "context": meta.get("context", ""),
+                        "depth": meta.get("depth", 0),
+                        "similarity": similarity,
+                        "age_hours": age_hours,
+                        "timestamp": meta.get("timestamp", 0),
+                    })
+
+            collisions.sort(key=lambda x: x["similarity"], reverse=True)
+            return collisions[:max_results]
+
+        except Exception as e:
+            print(f"   [Memory] Cross-temporal query failed: {e}")
+            return []
+
+    def find_batch_cross_temporal(
+        self,
+        nodes: list,
+        threshold: float = 0.82,
+        min_age_hours: float = 24.0,
+    ) -> list[dict]:
+        """Check multiple nodes at once for cross-temporal collisions.
+
+        More efficient than calling find_cross_temporal_collisions() per node.
+        Returns the best collision found across all input nodes.
+        """
+        if not self._available or not self._nodes_collection:
+            return []
+
+        best_collisions: list[dict] = []
+
+        for i, node in enumerate(nodes):
+            if node.embedding is None:
+                continue
+
+            matches = self.find_cross_temporal_collisions(
+                query_embedding=node.embedding,
+                threshold=threshold,
+                min_age_hours=min_age_hours,
+                max_results=2,
+            )
+
+            for match in matches:
+                match["current_node_topic"] = node.topic
+                match["current_node_domain"] = node.domain
+                match["current_node_index"] = i
+                best_collisions.append(match)
+
+        best_collisions.sort(key=lambda x: x["similarity"], reverse=True)
+        return best_collisions[:5]

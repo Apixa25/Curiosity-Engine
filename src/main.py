@@ -38,7 +38,7 @@ from src.memory.analytics import SerendipityAnalytics
 from src.association_engine.multi_seed import MultiSeedGenerator
 from src.association_engine.collision_engine import CollisionEngine
 from src.problems.stuck_queue import StuckQueue
-from src.models import ContextSnapshot, Interjection, CollisionResult
+from src.models import ContextSnapshot, Interjection, CollisionResult, AssociationNode
 
 
 class ComputationalSerendipity:
@@ -339,7 +339,23 @@ class ComputationalSerendipity:
                     if pc.chain_b and pc.chain_b.metadata and "problem_id" in pc.chain_b.metadata:
                         self.stuck_queue.record_collision(pc.chain_b.metadata["problem_id"])
 
-            if verbose and not collisions and not problem_collisions:
+            # ── CROSS-TEMPORAL MEMORY COLLISIONS ──────────────────────────
+            cross_temporal_collision: CollisionResult | None = None
+            if (not collisions
+                    and self.cfg.deep_thought.cross_temporal_enabled
+                    and self.memory.is_available
+                    and self.memory.node_count > 0):
+                if verbose:
+                    print(f"   ⏳ Checking {result.total_chains} new chains against {self.memory.node_count} stored nodes...")
+
+                cross_temporal_collision = await self._check_cross_temporal(
+                    result.all_chains, verbose=verbose
+                )
+
+                if cross_temporal_collision:
+                    collisions = [cross_temporal_collision]
+
+            if verbose and not collisions:
                 print(f"   🌀 No collisions detected — falling back to best single chain")
 
             # ── COLLISION PATH: Score + Hypothesis ───────────────────────
@@ -446,16 +462,18 @@ class ComputationalSerendipity:
             self._thinking = False
 
     def _store_fired_chain(self, chain, score, interjection, seed_topic: str) -> None:
-        """Persist the fired chain in long-term memory with full scoring breakdown."""
+        """Persist the fired chain in long-term memory with full scoring breakdown.
+        Also stores all intermediate node embeddings for cross-temporal collision detection."""
         if not self.memory.is_available:
             return
 
         import uuid
+        chain_id = f"chain-{uuid.uuid4().hex[:12]}"
         endpoint = chain.nodes[-1] if chain.nodes else None
         embedding = endpoint.embedding if endpoint else None
 
         self.memory.store_chain(
-            chain_id=f"chain-{uuid.uuid4().hex[:12]}",
+            chain_id=chain_id,
             seed_topic=seed_topic,
             endpoint_topic=chain.endpoint_topic,
             chain_summary=chain.summary(),
@@ -472,6 +490,104 @@ class ComputationalSerendipity:
             score_bridgeability=score.bridgeability,
             score_novelty=score.novelty,
         )
+
+        if chain.nodes and len(chain.nodes) > 2:
+            stored = self.memory.store_intermediate_nodes(
+                chain_id=chain_id,
+                nodes=chain.nodes,
+                seed_topic=seed_topic,
+                context=self.current_context,
+            )
+            if stored > 0 and self._deep_thought_active:
+                print(f"   ⏳ Stored {stored} intermediate nodes for cross-temporal memory")
+
+    async def _check_cross_temporal(
+        self, chains: list, verbose: bool = False
+    ) -> CollisionResult | None:
+        """Check new chains against stored historical nodes for time-gap collisions.
+
+        This is the "7.5 million years" computation: today's chain passes through
+        the same conceptual region as a chain from weeks ago. Neither chain connects
+        to the other's endpoint — the collision is purely at INTERMEDIATE nodes,
+        completely invisible unless you compare across time.
+        """
+        min_age = self.cfg.deep_thought.cross_temporal_min_age_hours
+        threshold = self.cfg.deep_thought.collision_threshold
+
+        for chain in chains:
+            if not chain.nodes or len(chain.nodes) < 3:
+                continue
+
+            intermediate_nodes = chain.nodes[1:-1]
+            matches = self.memory.find_batch_cross_temporal(
+                nodes=intermediate_nodes,
+                threshold=threshold,
+                min_age_hours=min_age,
+            )
+
+            if matches:
+                best = matches[0]
+                age_days = best["age_hours"] / 24
+
+                if verbose:
+                    print(f"   ⏳⚡ CROSS-TEMPORAL COLLISION!")
+                    print(f"      Today's node: \"{best['current_node_topic']}\" [{best.get('current_node_domain', '')}]")
+                    print(f"      Memory node: \"{best['topic']}\" [{best['domain']}] (from {age_days:.1f} days ago)")
+                    print(f"      Similarity: {best['similarity']:.4f}")
+                    print(f"      Original context: \"{best['context'][:60]}\"")
+
+                current_node_idx = best.get("current_node_index", 1)
+                current_node = intermediate_nodes[current_node_idx] if current_node_idx < len(intermediate_nodes) else intermediate_nodes[0]
+
+                memory_node = AssociationNode(
+                    topic=best["topic"],
+                    domain=best["domain"],
+                    connection_reason=best["connection_reason"],
+                    depth=best.get("depth", 0),
+                )
+
+                concept = await self._synthesize_temporal_concept(
+                    current_node.topic, best["topic"], chain.seed_topic, best["seed_topic"]
+                )
+
+                collision = CollisionResult(
+                    chain_a=chain,
+                    chain_b=None,
+                    collision_node_a=current_node,
+                    collision_node_b=memory_node,
+                    collision_concept=concept,
+                    collision_similarity=best["similarity"],
+                    total_causal_distance=chain.total_semantic_distance,
+                    total_hops=len(chain.nodes) - 1 + best.get("depth", 0),
+                    total_domain_crossings=chain.domain_crossings,
+                    seed_a_label=f"today:{chain.seed_topic[:30]}",
+                    seed_b_label=f"memory:{best['seed_topic'][:30]} ({age_days:.0f}d ago)",
+                )
+
+                return collision
+
+        return None
+
+    async def _synthesize_temporal_concept(
+        self, topic_a: str, topic_b: str, seed_a: str, seed_b: str
+    ) -> str:
+        """Name the shared concept at a cross-temporal collision point."""
+        from src.association_engine.collision_engine import COLLISION_CONCEPT_PROMPT
+        try:
+            prompt = COLLISION_CONCEPT_PROMPT.format(
+                seed_a=seed_a,
+                node_a_topic=topic_a,
+                node_a_domain="current",
+                node_a_reason="",
+                seed_b=seed_b,
+                node_b_topic=topic_b,
+                node_b_domain="memory",
+                node_b_reason="",
+            )
+            response = await self.llm.generate(prompt, temperature=0.7)
+            return response.text.strip().strip('"').strip("'")
+        except Exception:
+            return f"{topic_a} / {topic_b}"
 
     def _incubate_chains(self, ranked_chains, seed_topic: str) -> None:
         """Send promising-but-not-ready chains to the incubation queue."""
@@ -589,6 +705,7 @@ class ComputationalSerendipity:
         print("     'solve <problem>'   → Add a stuck problem (engine works on it in background)")
         print("     'problems'          → List all active stuck problems")
         print("     'forget <id>'       → Remove a stuck problem")
+        print("     'memory'            → Cross-temporal memory status (stored nodes + chains)")
         print("     'quit'              → Shut down")
         print(f"{'─' * 70}")
 
@@ -1316,6 +1433,32 @@ class ComputationalSerendipity:
                     print(f"   ❌ No active problem matching \"{target}\"")
                     print(f"   Use 'problems' to see active problems and their IDs")
 
+            elif cmd in ("memory", "memory stats", "nodes"):
+                if self.memory.is_available:
+                    chains = self.memory.chain_count
+                    nodes = self.memory.node_count
+                    problems = len(self.stuck_queue.active_problems)
+                    print(f"\n   🧠 CROSS-TEMPORAL MEMORY STATUS")
+                    print(f"   │  Chains stored: {chains}")
+                    print(f"   │  Intermediate nodes: {nodes}")
+                    print(f"   │  Active stuck problems: {problems}")
+                    if nodes > 0:
+                        min_age = self.cfg.deep_thought.cross_temporal_min_age_hours
+                        print(f"   │  Min collision age: {min_age}h")
+                        print(f"   │  Collision threshold: {self.cfg.deep_thought.collision_threshold}")
+                        print(f"   │")
+                        print(f"   │  Every new chain's intermediate nodes are compared against")
+                        print(f"   │  ALL stored nodes older than {min_age}h. When a match is found,")
+                        print(f"   │  it means today's thought passes through the same hidden")
+                        print(f"   │  conceptual region as something from your past.")
+                    else:
+                        print(f"   │")
+                        print(f"   │  No intermediate nodes stored yet.")
+                        print(f"   │  Run in Deep Thought mode to start building temporal memory.")
+                    print(f"   └─ Cross-temporal collisions: {'enabled' if self.cfg.deep_thought.cross_temporal_enabled else 'disabled'}")
+                else:
+                    print("   ❌ Memory not available — install chromadb")
+
             elif cmd in ("👍", "good", "like", "thumbs up", "nice"):
                 if self.memory.rate_last_interjection(5):
                     print("   ⭐ Rated last interjection 5/5 — I'll remember you liked that!")
@@ -1496,8 +1639,13 @@ class ComputationalSerendipity:
 
     def _print_collision_reveal(self, collision: CollisionResult) -> None:
         """Reveal the full bisociation collision that produced a Deep Thought hypothesis."""
+        is_temporal = collision.chain_b is None and "memory:" in collision.seed_b_label
+
         print(f"\n{'═' * 70}")
-        print(f"💥 BISOCIATION COLLISION REVEALED (Deep Thought transparency)")
+        if is_temporal:
+            print(f"⏳ CROSS-TEMPORAL COLLISION REVEALED (time-gap bisociation)")
+        else:
+            print(f"💥 BISOCIATION COLLISION REVEALED (Deep Thought transparency)")
         print(f"{'═' * 70}")
 
         print(f"\n   ┌─ CHAIN A (seed: {collision.seed_a_label})")
@@ -1508,12 +1656,21 @@ class ComputationalSerendipity:
                 print(f"   │  {arrow} {node.topic} [{node.domain}]{marker}")
         print(f"   │")
 
-        print(f"   ├─ CHAIN B (seed: {collision.seed_b_label})")
-        if collision.chain_b and collision.chain_b.nodes:
-            for i, node in enumerate(collision.chain_b.nodes):
-                arrow = "●" if i == 0 else "→"
-                marker = " ◉ COLLISION" if node == collision.collision_node_b else ""
-                print(f"   │  {arrow} {node.topic} [{node.domain}]{marker}")
+        if is_temporal:
+            print(f"   ├─ MEMORY NODE ({collision.seed_b_label})")
+            if collision.collision_node_b:
+                print(f"   │  ◉ {collision.collision_node_b.topic} [{collision.collision_node_b.domain}]")
+                if collision.collision_node_b.connection_reason:
+                    print(f"   │    ↳ {collision.collision_node_b.connection_reason[:80]}")
+            print(f"   │  (This node was stored from a past chain — today's chain passed through")
+            print(f"   │   the same conceptual region without knowing it existed)")
+        else:
+            print(f"   ├─ CHAIN B (seed: {collision.seed_b_label})")
+            if collision.chain_b and collision.chain_b.nodes:
+                for i, node in enumerate(collision.chain_b.nodes):
+                    arrow = "●" if i == 0 else "→"
+                    marker = " ◉ COLLISION" if node == collision.collision_node_b else ""
+                    print(f"   │  {arrow} {node.topic} [{node.domain}]{marker}")
         print(f"   │")
 
         print(f"   ├─ COLLISION POINT")
@@ -1534,7 +1691,7 @@ class ComputationalSerendipity:
             print(f"   │  TOTAL                : {s.total:.3f}")
             print(f"   │")
 
-        print(f"   ├─ CONFIDENCE: {collision.confidence.upper()}")
+        print(f"   ├─ CONFIDENCE: {collision.confidence.upper() if collision.confidence else 'PENDING'}")
         print(f"   │")
 
         if collision.hypothesis:
@@ -1545,9 +1702,14 @@ class ComputationalSerendipity:
         else:
             print(f"   └─ (no hypothesis generated)")
 
-        print(f"\n   🧠 Two independent causal threads — invisible to each other —")
-        print(f"      found a shared mechanism buried {collision.total_hops} hops deep.")
-        print(f"      This is computational bisociation. This is Deep Thought.")
+        if is_temporal:
+            print(f"\n   ⏳ A chain from your PAST and a chain from TODAY both passed through")
+            print(f"      the same hidden conceptual region — separated by time, connected")
+            print(f"      by invisible mechanism. This is the 7.5-million-year computation.")
+        else:
+            print(f"\n   🧠 Two independent causal threads — invisible to each other —")
+            print(f"      found a shared mechanism buried {collision.total_hops} hops deep.")
+            print(f"      This is computational bisociation. This is Deep Thought.")
         print(f"{'═' * 70}")
 
     async def _show_serendipity_stats(self) -> None:
