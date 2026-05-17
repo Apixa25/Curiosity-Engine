@@ -125,6 +125,33 @@ class MemoryPersistConfig:
 
 
 @dataclass
+class DeepThoughtScoringWeights:
+    """Collision scoring weights for Deep Thought mode."""
+    causal_depth: float = 0.20
+    seed_distance: float = 0.20
+    hiddenness: float = 0.15
+    domain_span: float = 0.15
+    mechanism_specificity: float = 0.15
+    testability: float = 0.15
+
+
+@dataclass
+class DeepThoughtConfig:
+    """Configuration for Deep Thought / LSD mode — butterfly-effect discovery engine."""
+    enabled: bool = False
+    parallel_seeds: int = 5
+    max_depth: int = 15
+    keep_per_level: int = 5
+    min_domain_crossings: int = 4
+    collision_threshold: float = 0.82
+    cross_temporal_enabled: bool = True
+    cross_temporal_min_age_hours: float = 24.0
+    invert_efficiency: bool = True
+    llm_temperature_boost: float = 0.2
+    scoring_weights: DeepThoughtScoringWeights = field(default_factory=DeepThoughtScoringWeights)
+
+
+@dataclass
 class InputPipelineConfig:
     vision: VisionConfig = field(default_factory=VisionConfig)
     audio: AudioConfig = field(default_factory=AudioConfig)
@@ -142,6 +169,8 @@ class EngineConfig:
     git: GitMonitorConfig = field(default_factory=GitMonitorConfig)
     embeddings: EmbeddingConfig = field(default_factory=EmbeddingConfig)
     memory: MemoryPersistConfig = field(default_factory=MemoryPersistConfig)
+    creativity_mode: str = "normal"  # "normal" or "deep_thought"
+    deep_thought: DeepThoughtConfig = field(default_factory=DeepThoughtConfig)
 
 
 def load_config(config_path: str | Path | None = None) -> EngineConfig:
@@ -176,6 +205,8 @@ def load_config(config_path: str | Path | None = None) -> EngineConfig:
     git_raw = raw.get("git", {})
     emb_raw = raw.get("embeddings", {})
     mem_raw = raw.get("memory", {})
+    dt_raw = raw.get("deep_thought", {})
+    dt_sw = dt_raw.get("scoring_weights", {})
 
     return EngineConfig(
         heartbeat=HeartbeatConfig(
@@ -264,5 +295,26 @@ def load_config(config_path: str | Path | None = None) -> EngineConfig:
             max_age_hours=mem_raw.get("max_age_hours", 24),
             max_rescores=mem_raw.get("max_rescores", 5),
             profile_rebuild_every=mem_raw.get("profile_rebuild_every", 10),
+        ),
+        creativity_mode=raw.get("creativity_mode", "normal"),
+        deep_thought=DeepThoughtConfig(
+            enabled=dt_raw.get("enabled", False),
+            parallel_seeds=dt_raw.get("parallel_seeds", 5),
+            max_depth=dt_raw.get("max_depth", 15),
+            keep_per_level=dt_raw.get("keep_per_level", 5),
+            min_domain_crossings=dt_raw.get("min_domain_crossings", 4),
+            collision_threshold=dt_raw.get("collision_threshold", 0.82),
+            cross_temporal_enabled=dt_raw.get("cross_temporal_enabled", True),
+            cross_temporal_min_age_hours=dt_raw.get("cross_temporal_min_age_hours", 24.0),
+            invert_efficiency=dt_raw.get("invert_efficiency", True),
+            llm_temperature_boost=dt_raw.get("llm_temperature_boost", 0.2),
+            scoring_weights=DeepThoughtScoringWeights(
+                causal_depth=dt_sw.get("causal_depth", 0.20),
+                seed_distance=dt_sw.get("seed_distance", 0.20),
+                hiddenness=dt_sw.get("hiddenness", 0.15),
+                domain_span=dt_sw.get("domain_span", 0.15),
+                mechanism_specificity=dt_sw.get("mechanism_specificity", 0.15),
+                testability=dt_sw.get("testability", 0.15),
+            ),
         ),
     )

@@ -35,6 +35,7 @@ from src.memory.store import MemoryStore, MemoryConfig
 from src.memory.incubation import IncubationQueue
 from src.memory.profile import ProfileBuilder
 from src.memory.analytics import SerendipityAnalytics
+from src.association_engine.multi_seed import MultiSeedGenerator
 from src.models import ContextSnapshot, Interjection
 
 
@@ -114,6 +115,16 @@ class ComputationalSerendipity:
         )
         self.analytics = SerendipityAnalytics(memory=self.memory)
         self._overheard_buffer: list[str] = []
+        self._deep_thought_active = self.cfg.creativity_mode == "deep_thought" or self.cfg.deep_thought.enabled
+        self.multi_seed: MultiSeedGenerator | None = None
+        if self._deep_thought_active:
+            self.multi_seed = MultiSeedGenerator(
+                llm=self.llm,
+                tree_config=self.cfg.association_tree,
+                dt_config=self.cfg.deep_thought,
+                embedder=self.embedder,
+                memory=self.memory,
+            )
 
     def enable_multimodal(self) -> None:
         """Initialize vision + audio channels. Call before run_live for full perception."""
@@ -239,6 +250,95 @@ class ComputationalSerendipity:
         finally:
             self._thinking = False
 
+    async def run_deep_thought_cycle(self, seed_topic: str, verbose: bool = True) -> Interjection | None:
+        """Run a Deep Thought cycle: multi-seed parallel chains → best chain → interjection.
+
+        In Sprint 1, this generates parallel chains from multiple seeds and picks
+        the single best chain (same as normal mode, but from a much wider search).
+        Sprint 2 will add collision detection between chains from different seeds.
+        """
+        if not self.multi_seed:
+            return await self.run_creative_cycle(seed_topic, verbose=verbose)
+
+        self._thinking = True
+        t0 = time.time()
+
+        try:
+            ctx = ContextSnapshot(seed_topic=seed_topic, heartbeat_id=f"hb-{self.heartbeat.beat_count:04d}")
+
+            if verbose:
+                print(f"\n   🔮 DEEP THOUGHT CYCLE from: \"{seed_topic[:60]}\"")
+
+            result = await self.multi_seed.generate_parallel(
+                current_context=seed_topic,
+                heartbeat_id=ctx.heartbeat_id,
+            )
+
+            if not result.all_chains:
+                if verbose:
+                    print("   ❌ No chains generated across any seed.")
+                return None
+
+            if verbose:
+                print(f"   📊 Scoring top {min(5, len(result.all_chains))} of {result.total_chains} chains from {result.seed_count} seeds...")
+
+            ranked = await self.scorer.rank_chains(result.all_chains, ctx, self.past_topics)
+            best_chain, best_score = ranked[0]
+
+            seed_label = "unknown"
+            for label, chains in result.seed_chains.items():
+                if best_chain in chains:
+                    seed_label = label
+                    break
+
+            if verbose:
+                print(f"   🏆 Best: {best_chain.endpoint_topic} (score: {best_score.total:.3f}, from seed: {seed_label})")
+                print(f"   🔗 Chain length: {len(best_chain.nodes)} hops, {best_chain.domain_crossings} domain crossings")
+
+            if best_score.total < self.cfg.scoring.fire_threshold:
+                if verbose:
+                    print(f"   🤫 Score {best_score.total:.3f} below threshold {self.cfg.scoring.fire_threshold}")
+                self._incubate_chains(ranked, seed_topic)
+                return None
+
+            if verbose:
+                print(f"   🔍 Searching web for facts to ground the chain...")
+
+            search_result = None
+            try:
+                search_result = await self.searcher.search_for_chain(
+                    endpoint_topic=best_chain.endpoint_topic,
+                    chain_summary=best_chain.summary(),
+                    context=seed_topic,
+                )
+                if verbose and search_result and search_result.facts:
+                    print(f"   ✅ Found {len(search_result.facts)} grounding facts")
+            except Exception as e:
+                if verbose:
+                    print(f"   ⚠️  Search failed: {e}")
+
+            interjection = await self.bridge.build_interjection(
+                best_chain,
+                best_score,
+                ctx,
+                search_facts=search_result.facts if search_result else None,
+                search_sources=search_result.source_urls if search_result else None,
+            )
+            self.past_topics.append(best_chain.endpoint_topic)
+            self.scorer.record_interjection(best_chain)
+
+            self._store_fired_chain(best_chain, best_score, interjection, seed_topic)
+            self._incubate_chains(ranked[1:], seed_topic)
+
+            elapsed = time.time() - t0
+            if verbose:
+                print(f"   ⏱️  Deep Thought cycle took {elapsed:.1f}s")
+
+            return interjection
+
+        finally:
+            self._thinking = False
+
     def _store_fired_chain(self, chain, score, interjection, seed_topic: str) -> None:
         """Persist the fired chain in long-term memory with full scoring breakdown."""
         if not self.memory.is_available:
@@ -353,6 +453,9 @@ class ComputationalSerendipity:
             print(f"   Mic Input: No mic -- type to chat")
         voice_status = f"🔊 {self.voice.cfg.voice}" if self.voice.is_available else "🔇 Disabled"
         print(f"   Voice Output: {voice_status}")
+        if self._deep_thought_active:
+            print(f"   🔮 DEEP THOUGHT MODE ACTIVE")
+            print(f"      Parallel seeds: {self.cfg.deep_thought.parallel_seeds} | Depth: {self.cfg.deep_thought.max_depth} | Min crossings: {self.cfg.deep_thought.min_domain_crossings}")
 
         print(f"\n{'─' * 70}")
         print("   Commands while running:")
@@ -374,6 +477,9 @@ class ComputationalSerendipity:
         print("     'reveal'            → Show the full causal chain behind last interjection")
         print("     'transparency'      → Auto-show causal chains (toggle on/off)")
         print("     'stats'             → Serendipity metrics and AHA! rate over time")
+        print("     'deep thought'      → Activate Deep Thought mode (parallel chains, butterfly-effect)")
+        print("     'normal mode'       → Return to normal creative companion mode")
+        print("     'mode'              → Show current creativity mode")
         print("     'quit'              → Shut down")
         print(f"{'─' * 70}")
 
@@ -477,8 +583,12 @@ class ComputationalSerendipity:
             self.audio.paused = False
 
     async def _heartbeat_creative(self, ctx: ContextSnapshot, seed: str) -> None:
-        """Full creative pipeline: association tree + scoring + search + bridge."""
-        interjection = await self.run_creative_cycle(seed, verbose=True)
+        """Full creative pipeline: association tree + scoring + search + bridge.
+        In Deep Thought mode, routes through multi-seed parallel generation."""
+        if self._deep_thought_active:
+            interjection = await self.run_deep_thought_cycle(seed, verbose=True)
+        else:
+            interjection = await self.run_creative_cycle(seed, verbose=True)
 
         if interjection:
             self._last_interjection = interjection
@@ -1012,6 +1122,33 @@ class ComputationalSerendipity:
             elif cmd == "stats":
                 await self._show_serendipity_stats()
 
+            elif cmd in ("mode deep_thought", "mode deep thought", "deep thought", "lsd mode", "deep thought on"):
+                if not self._deep_thought_active:
+                    self._deep_thought_active = True
+                    if not self.multi_seed:
+                        self.multi_seed = MultiSeedGenerator(
+                            llm=self.llm,
+                            tree_config=self.cfg.association_tree,
+                            dt_config=self.cfg.deep_thought,
+                            embedder=self.embedder,
+                            memory=self.memory,
+                        )
+                    print(f"   🔮 DEEP THOUGHT MODE ACTIVATED")
+                    print(f"   Parallel seeds: {self.cfg.deep_thought.parallel_seeds} | Max depth: {self.cfg.deep_thought.max_depth} | Min crossings: {self.cfg.deep_thought.min_domain_crossings}")
+                    print(f"   The engine will now generate {self.cfg.deep_thought.parallel_seeds} parallel chains per heartbeat")
+                    print(f"   and search for butterfly-effect connections between them.")
+                else:
+                    print(f"   🔮 Deep Thought mode is already active")
+
+            elif cmd in ("mode normal", "normal mode", "deep thought off", "lsd off"):
+                self._deep_thought_active = False
+                print(f"   🌳 Normal mode restored — friendly creative companion")
+
+            elif cmd == "mode":
+                mode = "🔮 Deep Thought" if self._deep_thought_active else "🌳 Normal"
+                print(f"   Current mode: {mode}")
+                print(f"   Switch: 'deep thought' or 'normal mode'")
+
             elif cmd in ("👍", "good", "like", "thumbs up", "nice"):
                 if self.memory.rate_last_interjection(5):
                     print("   ⭐ Rated last interjection 5/5 — I'll remember you liked that!")
@@ -1377,7 +1514,23 @@ async def main():
         args.remove("--debug-audio")
 
     config = load_config()
+
+    deep_thought_cli = False
+    if "--mode" in args:
+        mode_idx = args.index("--mode")
+        if mode_idx + 1 < len(args):
+            mode_value = args[mode_idx + 1].lower().replace(" ", "_")
+            if mode_value in ("deep_thought", "deep-thought", "deepthought", "lsd"):
+                config.creativity_mode = "deep_thought"
+                config.deep_thought.enabled = True
+                deep_thought_cli = True
+            args.pop(mode_idx + 1)
+            args.pop(mode_idx)
+
     engine = ComputationalSerendipity(config, debug_audio=debug_audio)
+
+    if deep_thought_cli:
+        print(f"\n   🔮 DEEP THOUGHT MODE via CLI flag")
 
     if "--live" in args:
         args.remove("--live")

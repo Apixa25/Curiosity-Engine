@@ -106,3 +106,35 @@ memory:
   max_age_hours: 24                  # incubating ideas expire after this long
   max_rescores: 5                    # max times an idea gets re-evaluated
   profile_rebuild_every: 10          # rebuild personality profile every N ratings
+
+# ── Deep Thought Mode ────────────────────────────────────────────────
+# Butterfly-effect discovery engine. Instead of one chain per heartbeat,
+# generates parallel chains from multiple seeds and detects "collision points"
+# where independent causal threads share hidden intermediate concepts.
+# This is computational LSD: hyper-connectivity between normally separate
+# concept networks, producing hypotheses no human mind could trace alone.
+#
+# Activate via CLI:  python -m src.main --live --mode deep_thought
+# Or set creativity_mode below.
+
+creativity_mode: "normal"  # "normal" = friendly creative companion, "deep_thought" = oracle mode
+
+deep_thought:
+  enabled: false                     # set true (or use --mode deep_thought) to activate
+  parallel_seeds: 5                  # independent chains generated per heartbeat
+  max_depth: 15                      # chain depth (vs 7 in normal). Up to 30 for ultimate questions
+  keep_per_level: 5                  # wider exploration at each depth
+  min_domain_crossings: 4            # force more boundary-crossing than normal mode (1)
+  collision_threshold: 0.82          # cosine similarity to detect bisociation points
+  cross_temporal_enabled: true       # check new chains against old memory for time-gap collisions
+  cross_temporal_min_age_hours: 24   # only collide with chains older than this
+  invert_efficiency: true            # reward MORE hops (opposite of Kenett efficiency)
+  llm_temperature_boost: 0.2        # added to base temperature for Deep Thought hops
+
+  scoring_weights:                   # collision scoring (replaces normal 5-metric scoring)
+    causal_depth: 0.20               # more invisible causation = more magical
+    seed_distance: 0.20              # farther apart seeds = more surprising collision
+    hiddenness: 0.15                 # collision buried in middle = more hidden
+    domain_span: 0.15                # more domain boundaries crossed = more creative
+    mechanism_specificity: 0.15      # real causal mechanism = more grounded
+    testability: 0.15                # actionable hypothesis = more useful

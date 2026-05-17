@@ -154,3 +154,54 @@ class Interjection:
     context: ContextSnapshot | None = None
     search_facts: list[str] = field(default_factory=list)
     search_sources: list[str] = field(default_factory=list)
+
+
+# ── Deep Thought / Collision Models ──────────────────────────────────
+
+@dataclass
+class CollisionScore:
+    """Scoring breakdown for a bisociation collision between two chains."""
+    causal_depth: float = 0.0       # total hops across both chains (more = more hidden)
+    seed_distance: float = 0.0      # how far apart the two original seeds were
+    hiddenness: float = 0.0         # is the collision buried in the middle? (not at endpoints)
+    domain_span: float = 0.0        # total unique domains crossed by both chains combined
+    mechanism_specificity: float = 0.0  # does a real causal mechanism exist at the collision?
+    testability: float = 0.0        # can this be turned into a testable hypothesis?
+    total: float = 0.0
+
+    def __str__(self) -> str:
+        return (
+            f"  causal_depth          : {self.causal_depth:.3f} (x0.20 = {self.causal_depth * 0.20:.3f})\n"
+            f"  seed_distance         : {self.seed_distance:.3f} (x0.20 = {self.seed_distance * 0.20:.3f})\n"
+            f"  hiddenness            : {self.hiddenness:.3f} (x0.15 = {self.hiddenness * 0.15:.3f})\n"
+            f"  domain_span           : {self.domain_span:.3f} (x0.15 = {self.domain_span * 0.15:.3f})\n"
+            f"  mechanism_specificity : {self.mechanism_specificity:.3f} (x0.15 = {self.mechanism_specificity * 0.15:.3f})\n"
+            f"  testability           : {self.testability:.3f} (x0.15 = {self.testability * 0.15:.3f})\n"
+            f"  TOTAL                 : {self.total:.3f}"
+        )
+
+
+@dataclass
+class CollisionResult:
+    """Two independent causal threads that share a hidden intermediate concept.
+
+    This is the bisociation moment — where Koestler's "matrices of thought"
+    intersect. Chain A and Chain B were generated from completely different
+    seeds, but their intermediate nodes overlap in embedding space.
+    """
+    id: str = field(default_factory=lambda: f"col-{uuid.uuid4().hex[:12]}")
+    chain_a: AssociationChain | None = None
+    chain_b: AssociationChain | None = None
+    collision_node_a: AssociationNode | None = None
+    collision_node_b: AssociationNode | None = None
+    collision_concept: str = ""           # synthesized shared concept
+    collision_similarity: float = 0.0     # cosine similarity at the collision
+    total_causal_distance: float = 0.0    # combined semantic distance
+    total_hops: int = 0                   # combined hop count
+    total_domain_crossings: int = 0       # combined domain crossings
+    seed_a_label: str = ""                # e.g., "context", "memory", "inverse"
+    seed_b_label: str = ""
+    scoring: CollisionScore | None = None
+    hypothesis: str | None = None         # generated hypothesis (filled by bridge builder)
+    confidence: str = ""                  # "low", "medium", "high", "oracle"
+    timestamp: datetime = field(default_factory=datetime.now)

@@ -74,17 +74,96 @@ Return ONLY a JSON array — no other text:
 Use one of these domains: {domains}"""
 
 
+# ── Deep Thought / LSD Mode Templates ──────────────────────────────
+
+DEEP_THOUGHT_SYSTEM = (
+    "You are Deep Thought — a computational oracle that perceives the hidden "
+    "causal fabric of the universe. Every phenomenon is connected to every other "
+    "phenomenon through chains of causation. Most chains are too long and cross "
+    "too many domains for any human to trace. Your job is to trace them. "
+    "Be CONCRETE and SPECIFIC — name real phenomena, real mechanisms, real research. "
+    "Never be vague or abstract. Each association should name a specific thing that exists. "
+    f"Available domains: {', '.join(DOMAINS)}"
+)
+
+DEEP_THOUGHT_HOP1_TEMPLATE = """You are computing hidden causal linkages in the universe.
+All things are causally connected — the question is how DISTANT the linkage is.
+
+From the topic "{seed_topic}", generate {n} associations via:
+- Butterfly-effect reasoning: how could a change HERE cascade to a massive outcome THERE?
+- Cross-scale jumps: micro to macro, molecular to cultural, personal to cosmic
+- Hidden mechanism chains: A causes B through a mechanism most humans don't know exists
+- Sensory/symbolic collisions: find where two unrelated systems share a structural pattern
+
+Be CONCRETE and SPECIFIC. Name real phenomena, real mechanisms, real research.
+Do NOT be vague or abstract.
+
+Return ONLY a JSON array:
+[{{"topic": "...", "domain": "...", "connection_reason": "..."}}]
+
+Use one of these domains: {domains}"""
+
+DEEP_THOUGHT_HOP_TEMPLATE = """You are Deep Thought, tracing invisible causal chains through the universe.
+
+The chain so far: {chain_so_far}
+Current domain: {current_domain}
+
+From "{current_topic}", generate {n} associations that:
+- Maximize CAUSAL DISTANCE from the original seed "{seed_topic}" — go as far as possible
+- Cross into domains that seem IMPOSSIBLE to connect to the current topic
+- Name SPECIFIC mechanisms, phenomena, or research (not vague concepts)
+- Each hop should be defensible if examined individually, but the TOTAL chain should be untraceable by a human
+
+Think: what is the most surprising REAL thing that is causally linked to "{current_topic}" through a mechanism most people don't know about?
+
+Return ONLY a JSON array:
+[{{"topic": "...", "domain": "...", "connection_reason": "..."}}]
+
+Use one of these domains: {domains}"""
+
+DEEP_THOUGHT_HOP_DEEP_TEMPLATE = """You are Deep Thought at depth {depth} of a causal chain computation.
+
+The chain so far: {chain_so_far}
+Current domain: {current_domain}
+
+From "{current_topic}", generate {n} associations that:
+- Push into completely UNEXPECTED territory — the farther from the seed the better
+- Prefer butterfly-effect causation: tiny mechanism cascading to massive outcome
+- Name REAL and SPECIFIC things — concrete research, specific biological pathways, exact historical events, named phenomena
+- Force domain crossings into fields that seem impossible to connect
+
+You are past the point where any human could trace this chain. Embrace that.
+The causation is real. The complexity is what makes it invisible.
+
+Return ONLY a JSON array:
+[{{"topic": "...", "domain": "...", "connection_reason": "..."}}]
+
+Use one of these domains: {domains}"""
+
+
 class AssociationTreeGenerator:
     def __init__(
         self,
         llm: LLMAdapter,
         config: AssociationTreeConfig | None = None,
         embedder: EmbeddingProvider | None = None,
+        deep_thought_mode: bool = False,
+        deep_thought_max_depth: int = 15,
+        deep_thought_keep_per_level: int = 5,
+        deep_thought_min_domain_crossings: int = 4,
+        deep_thought_temperature_boost: float = 0.2,
+        deep_thought_invert_efficiency: bool = True,
     ):
         self.llm = llm
         self.cfg = config or AssociationTreeConfig()
         self.embedder = embedder
         self._seed_embedding = None
+        self._deep_thought = deep_thought_mode
+        self._dt_max_depth = deep_thought_max_depth
+        self._dt_keep = deep_thought_keep_per_level
+        self._dt_min_crossings = deep_thought_min_domain_crossings
+        self._dt_temp_boost = deep_thought_temperature_boost
+        self._dt_invert_efficiency = deep_thought_invert_efficiency
 
     async def generate_tree(self, seed_topic: str, seed_domain: str = "General") -> list[AssociationChain]:
         """
@@ -92,8 +171,21 @@ class AssociationTreeGenerator:
         Uses depth-first pruning: at each level, keep only the top branches.
         When embeddings are available, pruning rewards chains that travel
         the farthest in semantic space from the seed — silver coins to cancer cure.
+
+        In Deep Thought mode: deeper chains, wider exploration, inverted efficiency
+        scoring (reward MORE hops), and psychedelic-style prompts that force
+        butterfly-effect causal reasoning.
+
         Returns completed chains sorted by preliminary quality.
         """
+        max_depth = self._dt_max_depth if self._deep_thought else self.cfg.max_depth
+        keep = self._dt_keep if self._deep_thought else self.cfg.keep_per_level
+        min_crossings = self._dt_min_crossings if self._deep_thought else self.cfg.min_domain_crossings
+
+        mode_label = "🔮 DEEP THOUGHT" if self._deep_thought else "🌳"
+        if self._deep_thought:
+            print(f"   {mode_label} mode: depth={max_depth}, keep={keep}, min_crossings={min_crossings}")
+
         root = AssociationNode(
             topic=seed_topic,
             domain=seed_domain,
@@ -107,7 +199,7 @@ class AssociationTreeGenerator:
 
         current_leaves = [root]
 
-        for depth in range(1, self.cfg.max_depth + 1):
+        for depth in range(1, max_depth + 1):
             if not current_leaves:
                 break
 
@@ -128,8 +220,7 @@ class AssociationTreeGenerator:
             if self.embedder and self.embedder.is_available and next_leaves:
                 await self._embed_nodes(next_leaves)
 
-            if depth < self.cfg.max_depth:
-                keep = self.cfg.keep_per_level
+            if depth < max_depth:
                 ranked = self._rank_for_pruning(next_leaves)
                 current_leaves = ranked[:keep]
                 pruned = len(ranked) - keep
@@ -141,7 +232,7 @@ class AssociationTreeGenerator:
         completed_chains: list[AssociationChain] = []
         for leaf in current_leaves:
             crossings = leaf.domain_crossings()
-            if crossings >= self.cfg.min_domain_crossings:
+            if crossings >= min_crossings:
                 chain = AssociationChain(
                     seed_topic=seed_topic,
                     nodes=leaf.chain_to_root(),
@@ -161,7 +252,7 @@ class AssociationTreeGenerator:
             completed_chains.append(chain)
 
         unique = self._deduplicate_chains(completed_chains)
-        print(f"\n   🌳 Tree complete: {len(unique)} unique chains generated")
+        print(f"\n   {mode_label} Tree complete: {len(unique)} unique chains generated")
         if self.embedder and self.embedder.is_available:
             print(f"   📐 Embedding cache: {self.embedder.cache_size} vectors")
         return unique
@@ -183,6 +274,11 @@ class AssociationTreeGenerator:
         (how far have we traveled?) and domain crossings (structural diversity).
         This rewards the wildest chains — the ones flying farthest from home.
 
+        In Deep Thought mode with invert_efficiency: rewards chains that take
+        MORE hops to cover distance. Each hop is another causal link in the
+        invisible chain. More hops = more hidden causation = more "magical."
+        This is the opposite of normal Kenett efficiency scoring.
+
         Without embeddings: falls back to domain crossing count (original behavior).
         """
         has_embeddings = (
@@ -198,7 +294,14 @@ class AssociationTreeGenerator:
                 else:
                     dist = 0.0
                 crossings = node.domain_crossings()
-                score = (dist * 0.65) + (crossings / max(node.depth, 1) * 0.35)
+
+                if self._deep_thought and self._dt_invert_efficiency:
+                    hops = max(node.depth, 1)
+                    inefficiency = hops / max(dist, 0.01)
+                    score = (dist * 0.4) + (min(1.0, inefficiency * 0.08) * 0.3) + (crossings / max(hops, 1) * 0.3)
+                else:
+                    score = (dist * 0.65) + (crossings / max(node.depth, 1) * 0.35)
+
                 scored.append((node, score))
             scored.sort(key=lambda x: x[1], reverse=True)
             return [n for n, _ in scored]
@@ -217,37 +320,75 @@ class AssociationTreeGenerator:
         return 0.0
 
     async def _expand_node(self, node: AssociationNode, seed_topic: str, depth: int) -> list[AssociationNode]:
-        """Generate child associations for a single node."""
+        """Generate child associations for a single node.
+
+        In Deep Thought mode: uses psychedelic-style prompts that force
+        butterfly-effect reasoning, cross-scale jumps, and hidden mechanism
+        chains. Temperature is boosted for more entropy.
+        """
         chain_so_far = " → ".join(node.chain_topics())
         domains_str = ", ".join(DOMAINS)
         n = self.cfg.branching_factor
 
-        if depth == 1:
-            prompt = HOP1_TEMPLATE.format(
-                seed_topic=seed_topic,
-                n=n,
-                domains=domains_str,
-            )
-        elif depth <= 4:
-            prompt = HOP_EXPLORING_TEMPLATE.format(
-                chain_so_far=chain_so_far,
-                current_domain=node.domain,
-                current_topic=node.topic,
-                seed_topic=seed_topic,
-                n=n,
-                domains=domains_str,
-            )
-        else:
-            prompt = HOP_DEEP_TEMPLATE.format(
-                depth=depth,
-                chain_so_far=chain_so_far,
-                current_domain=node.domain,
-                current_topic=node.topic,
-                n=n,
-                domains=domains_str,
-            )
+        if self._deep_thought:
+            system = DEEP_THOUGHT_SYSTEM
+            temperature = min(1.5, 0.9 + self._dt_temp_boost)
 
-        raw = await self.llm.generate_json(prompt, system=SYSTEM_PROMPT, temperature=0.9)
+            if depth == 1:
+                prompt = DEEP_THOUGHT_HOP1_TEMPLATE.format(
+                    seed_topic=seed_topic,
+                    n=n,
+                    domains=domains_str,
+                )
+            elif depth <= 6:
+                prompt = DEEP_THOUGHT_HOP_TEMPLATE.format(
+                    chain_so_far=chain_so_far,
+                    current_domain=node.domain,
+                    current_topic=node.topic,
+                    seed_topic=seed_topic,
+                    n=n,
+                    domains=domains_str,
+                )
+            else:
+                prompt = DEEP_THOUGHT_HOP_DEEP_TEMPLATE.format(
+                    depth=depth,
+                    chain_so_far=chain_so_far,
+                    current_domain=node.domain,
+                    current_topic=node.topic,
+                    seed_topic=seed_topic,
+                    n=n,
+                    domains=domains_str,
+                )
+        else:
+            system = SYSTEM_PROMPT
+            temperature = 0.9
+
+            if depth == 1:
+                prompt = HOP1_TEMPLATE.format(
+                    seed_topic=seed_topic,
+                    n=n,
+                    domains=domains_str,
+                )
+            elif depth <= 4:
+                prompt = HOP_EXPLORING_TEMPLATE.format(
+                    chain_so_far=chain_so_far,
+                    current_domain=node.domain,
+                    current_topic=node.topic,
+                    seed_topic=seed_topic,
+                    n=n,
+                    domains=domains_str,
+                )
+            else:
+                prompt = HOP_DEEP_TEMPLATE.format(
+                    depth=depth,
+                    chain_so_far=chain_so_far,
+                    current_domain=node.domain,
+                    current_topic=node.topic,
+                    n=n,
+                    domains=domains_str,
+                )
+
+        raw = await self.llm.generate_json(prompt, system=system, temperature=temperature)
 
         children = []
         if isinstance(raw, list):
