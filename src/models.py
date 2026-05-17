@@ -44,6 +44,8 @@ class AssociationNode:
     parent: AssociationNode | None = field(default=None, repr=False)
     children: list[AssociationNode] = field(default_factory=list, repr=False)
     preliminary_score: float | None = None
+    grounding_status: str = "unverified"  # "grounded", "inferred", "speculative", "unverified"
+    grounding_source: str = ""            # URL or brief evidence description
 
     def chain_to_root(self) -> list[AssociationNode]:
         """Walk up to root, return path from root to self."""

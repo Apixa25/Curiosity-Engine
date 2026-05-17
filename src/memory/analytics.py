@@ -10,10 +10,17 @@ Kenett's Network Science model: creative thinkers have more flexible semantic ne
 
 We measure both through our existing scoring dimensions and aggregate them
 into actionable session and lifetime stats.
+
+Extended for Deep Thought mode with hypothesis verification tracking:
+- Hypothesis verification rate: of hypotheses investigated, how many held up?
+- Collision accuracy: do high-confidence collisions correlate with high ratings?
+- Grounding-to-insight ratio: what % grounding produces the best insights?
 """
 
 from __future__ import annotations
 
+import json
+import os
 import time
 from dataclasses import dataclass, field
 from collections import defaultdict
@@ -305,3 +312,211 @@ class SerendipityAnalytics:
         else:
             label = "🧊 Warming up"
         return f"{bar} {label}"
+
+
+# ── Hypothesis Verification Tracking ─────────────────────────────────
+
+@dataclass
+class HypothesisRecord:
+    """Record of a generated hypothesis and its verification status."""
+    collision_id: str
+    hypothesis: str
+    confidence: str
+    grounding_ratio: float
+    mechanism_verified: bool
+    is_falsifiable: bool
+    timestamp: float = field(default_factory=time.time)
+    user_rating: int | None = None
+    user_verified: str = "unverified"  # "confirmed", "refuted", "partial", "unverified"
+    user_notes: str = ""
+
+
+@dataclass
+class VerificationReport:
+    """Aggregated hypothesis verification metrics."""
+    total_hypotheses: int = 0
+    verified_count: int = 0       # user confirmed
+    refuted_count: int = 0        # user refuted
+    partial_count: int = 0        # partially correct
+    unverified_count: int = 0     # not yet checked
+
+    verification_rate: float = 0.0  # confirmed / (confirmed + refuted)
+    avg_grounding_when_verified: float = 0.0
+    avg_grounding_when_refuted: float = 0.0
+    optimal_grounding_range: str = ""
+
+    high_conf_accuracy: float = 0.0   # % of HIGH confidence that user confirmed
+    medium_conf_accuracy: float = 0.0
+    low_conf_accuracy: float = 0.0
+    oracle_accuracy: float = 0.0
+
+    mechanism_correlation: float = 0.0  # verified mechanism → user confirmed %
+
+
+class HypothesisTracker:
+    """Tracks hypothesis generation and verification over time.
+
+    Persists records to JSON so we can calibrate confidence levels
+    based on actual user feedback. Over time, this data reveals:
+    - What grounding ratio produces the best insights?
+    - Do high-confidence collisions correlate with user approval?
+    - Does mechanism verification predict real-world accuracy?
+    """
+
+    def __init__(self, persist_path: str = "data/hypothesis_records.json"):
+        self.persist_path = persist_path
+        self.records: list[HypothesisRecord] = []
+        self._load()
+
+    def record_hypothesis(
+        self,
+        collision_id: str,
+        hypothesis: str,
+        confidence: str,
+        grounding_ratio: float,
+        mechanism_verified: bool,
+        is_falsifiable: bool,
+    ) -> None:
+        """Record a newly generated hypothesis."""
+        record = HypothesisRecord(
+            collision_id=collision_id,
+            hypothesis=hypothesis,
+            confidence=confidence,
+            grounding_ratio=grounding_ratio,
+            mechanism_verified=mechanism_verified,
+            is_falsifiable=is_falsifiable,
+        )
+        self.records.append(record)
+        self._save()
+
+    def mark_verified(
+        self, collision_id: str, status: str, rating: int | None = None, notes: str = ""
+    ) -> bool:
+        """Mark a hypothesis as confirmed, refuted, or partial.
+
+        Returns True if found and updated.
+        """
+        for record in reversed(self.records):
+            if record.collision_id == collision_id:
+                record.user_verified = status
+                if rating is not None:
+                    record.user_rating = rating
+                if notes:
+                    record.user_notes = notes
+                self._save()
+                return True
+        return False
+
+    def mark_last_verified(
+        self, status: str, rating: int | None = None, notes: str = ""
+    ) -> bool:
+        """Mark the most recent hypothesis."""
+        if not self.records:
+            return False
+        record = self.records[-1]
+        record.user_verified = status
+        if rating is not None:
+            record.user_rating = rating
+        if notes:
+            record.user_notes = notes
+        self._save()
+        return True
+
+    def generate_verification_report(self) -> VerificationReport:
+        """Analyze hypothesis accuracy over time."""
+        if not self.records:
+            return VerificationReport()
+
+        report = VerificationReport(total_hypotheses=len(self.records))
+
+        confirmed = [r for r in self.records if r.user_verified == "confirmed"]
+        refuted = [r for r in self.records if r.user_verified == "refuted"]
+        partial = [r for r in self.records if r.user_verified == "partial"]
+        unverified = [r for r in self.records if r.user_verified == "unverified"]
+
+        report.verified_count = len(confirmed)
+        report.refuted_count = len(refuted)
+        report.partial_count = len(partial)
+        report.unverified_count = len(unverified)
+
+        decided = confirmed + refuted
+        if decided:
+            report.verification_rate = len(confirmed) / len(decided)
+
+        if confirmed:
+            report.avg_grounding_when_verified = (
+                sum(r.grounding_ratio for r in confirmed) / len(confirmed)
+            )
+        if refuted:
+            report.avg_grounding_when_refuted = (
+                sum(r.grounding_ratio for r in refuted) / len(refuted)
+            )
+
+        if report.avg_grounding_when_verified > 0:
+            low = report.avg_grounding_when_refuted
+            high = min(report.avg_grounding_when_verified + 0.1, 1.0)
+            report.optimal_grounding_range = f"{low:.0%} – {high:.0%}"
+
+        for level, attr in [
+            ("high", "high_conf_accuracy"),
+            ("medium", "medium_conf_accuracy"),
+            ("low", "low_conf_accuracy"),
+            ("oracle", "oracle_accuracy"),
+        ]:
+            level_records = [r for r in decided if r.confidence == level]
+            if level_records:
+                accuracy = sum(1 for r in level_records if r.user_verified == "confirmed") / len(level_records)
+                setattr(report, attr, accuracy)
+
+        mechanism_decided = [r for r in decided if r.mechanism_verified]
+        if mechanism_decided:
+            report.mechanism_correlation = (
+                sum(1 for r in mechanism_decided if r.user_verified == "confirmed")
+                / len(mechanism_decided)
+            )
+
+        return report
+
+    def _save(self) -> None:
+        """Persist records to JSON."""
+        os.makedirs(os.path.dirname(self.persist_path), exist_ok=True)
+        data = []
+        for r in self.records:
+            data.append({
+                "collision_id": r.collision_id,
+                "hypothesis": r.hypothesis[:500],
+                "confidence": r.confidence,
+                "grounding_ratio": r.grounding_ratio,
+                "mechanism_verified": r.mechanism_verified,
+                "is_falsifiable": r.is_falsifiable,
+                "timestamp": r.timestamp,
+                "user_rating": r.user_rating,
+                "user_verified": r.user_verified,
+                "user_notes": r.user_notes,
+            })
+        with open(self.persist_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+
+    def _load(self) -> None:
+        """Load records from JSON."""
+        if not os.path.exists(self.persist_path):
+            return
+        try:
+            with open(self.persist_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for item in data:
+                record = HypothesisRecord(
+                    collision_id=item["collision_id"],
+                    hypothesis=item["hypothesis"],
+                    confidence=item["confidence"],
+                    grounding_ratio=item["grounding_ratio"],
+                    mechanism_verified=item["mechanism_verified"],
+                    is_falsifiable=item["is_falsifiable"],
+                    timestamp=item.get("timestamp", 0),
+                    user_rating=item.get("user_rating"),
+                    user_verified=item.get("user_verified", "unverified"),
+                    user_notes=item.get("user_notes", ""),
+                )
+                self.records.append(record)
+        except (json.JSONDecodeError, KeyError, FileNotFoundError):
+            pass

@@ -34,11 +34,12 @@ from src.embeddings.provider import EmbeddingProvider, EmbeddingConfig
 from src.memory.store import MemoryStore, MemoryConfig
 from src.memory.incubation import IncubationQueue
 from src.memory.profile import ProfileBuilder
-from src.memory.analytics import SerendipityAnalytics
+from src.memory.analytics import SerendipityAnalytics, HypothesisTracker
 from src.association_engine.multi_seed import MultiSeedGenerator
 from src.association_engine.collision_engine import CollisionEngine
 from src.problems.stuck_queue import StuckQueue
 from src.memory.causation_graph import CausationGraph
+from src.safeguards.grounding import EpistemologicalEngine, GroundingReport
 from src.models import ContextSnapshot, Interjection, CollisionResult, AssociationNode
 
 
@@ -132,6 +133,11 @@ class ComputationalSerendipity:
         self.causation_graph: CausationGraph = CausationGraph(
             persist_path=self.cfg.memory.persist_directory + "/causation_graph.json",
         )
+        self.epistemology: EpistemologicalEngine = EpistemologicalEngine(llm=self.llm)
+        self.hypothesis_tracker: HypothesisTracker = HypothesisTracker(
+            persist_path=self.cfg.memory.persist_directory + "/hypothesis_records.json"
+        )
+        self._last_grounding_report: GroundingReport | None = None
         if self._deep_thought_active:
             self.multi_seed = MultiSeedGenerator(
                 llm=self.llm,
@@ -387,6 +393,21 @@ class ComputationalSerendipity:
                 hypothesis = await self.bridge.build_hypothesis(best_collision, collision_score)
                 self._last_collision = best_collision
 
+                grounding_report = await self.epistemology.full_verification(
+                    best_collision, verbose=verbose
+                )
+                self._last_grounding_report = grounding_report
+                best_collision.confidence = grounding_report.confidence_level
+
+                self.hypothesis_tracker.record_hypothesis(
+                    collision_id=best_collision.id,
+                    hypothesis=hypothesis,
+                    confidence=grounding_report.confidence_level,
+                    grounding_ratio=grounding_report.grounding_ratio,
+                    mechanism_verified=grounding_report.mechanism_verified,
+                    is_falsifiable=grounding_report.is_falsifiable,
+                )
+
                 interjection = Interjection(
                     heartbeat_id=ctx.heartbeat_id,
                     chain=best_collision.chain_a,
@@ -401,7 +422,8 @@ class ComputationalSerendipity:
                 elapsed = time.time() - t0
                 if verbose:
                     print(f"   ⏱️  Deep Thought cycle took {elapsed:.1f}s")
-                    print(f"   🔮 Confidence: {best_collision.confidence.upper()}")
+                    print(f"   🔮 Confidence: {best_collision.confidence.upper()} "
+                          f"(grounded: {grounding_report.grounding_ratio:.0%})")
 
                 return interjection
 
@@ -719,6 +741,9 @@ class ComputationalSerendipity:
         print("     'memory'            → Cross-temporal memory status (stored nodes + chains)")
         print("     'graph'             → Personal causation graph (hubs, bridges, frontiers)")
         print("     'path A to B'       → Find shortest conceptual path between two concepts")
+        print("     'verify'            → Epistemological verification of last collision/chain")
+        print("     'confirmed/refuted' → Mark last hypothesis (track accuracy over time)")
+        print("     'hypotheses'        → Hypothesis verification stats + confidence calibration")
         print("     'quit'              → Shut down")
         print(f"{'─' * 70}")
 
@@ -1541,6 +1566,46 @@ class ComputationalSerendipity:
                 else:
                     print("   ❌ Usage: path <concept A> to <concept B>")
 
+            elif cmd in ("verify", "ground", "check"):
+                if self._last_collision:
+                    if self._last_grounding_report:
+                        self._print_grounding_report(self._last_grounding_report)
+                    else:
+                        print("   🔬 Running epistemological verification...")
+                        report = await self.epistemology.full_verification(
+                            self._last_collision, verbose=True
+                        )
+                        self._last_grounding_report = report
+                        self._print_grounding_report(report)
+                elif self._last_interjection and self._last_interjection.chain:
+                    print("   🔬 Verifying chain grounding...")
+                    report = await self.epistemology.ground_chain(
+                        self._last_interjection.chain, verbose=True
+                    )
+                    self._last_grounding_report = report
+                    self._print_grounding_report(report)
+                else:
+                    print("   ❌ Nothing to verify yet — need a collision or interjection first")
+
+            elif cmd.startswith("confirmed") or cmd.startswith("refuted") or cmd.startswith("partial"):
+                status = cmd.split()[0]
+                notes = cmd[len(status):].strip()
+                if self._last_collision:
+                    self.hypothesis_tracker.mark_verified(
+                        self._last_collision.id, status=status, notes=notes
+                    )
+                    print(f"   📝 Hypothesis marked as: {status.upper()}")
+                    if notes:
+                        print(f"      Notes: {notes}")
+                elif self.hypothesis_tracker.mark_last_verified(status=status, notes=notes):
+                    print(f"   📝 Last hypothesis marked as: {status.upper()}")
+                else:
+                    print("   ❌ No hypothesis to mark — generate one first")
+
+            elif cmd in ("hypotheses", "hypothesis stats"):
+                report = self.hypothesis_tracker.generate_verification_report()
+                self._print_hypothesis_report(report)
+
             elif cmd in ("👍", "good", "like", "thumbs up", "nice"):
                 if self.memory.rate_last_interjection(5):
                     print("   ⭐ Rated last interjection 5/5 — I'll remember you liked that!")
@@ -1728,6 +1793,16 @@ class ComputationalSerendipity:
         print(f"      That's the whole point.")
         print(f"{'─' * 70}")
 
+    @staticmethod
+    def _grounding_icon(node: AssociationNode) -> str:
+        """Return a visual icon for a node's grounding status."""
+        return {
+            "grounded": "🟢",
+            "inferred": "🟡",
+            "speculative": "🔴",
+            "unverified": "",
+        }.get(node.grounding_status, "")
+
     def _print_collision_reveal(self, collision: CollisionResult) -> None:
         """Reveal the full bisociation collision that produced a Deep Thought hypothesis."""
         is_temporal = collision.chain_b is None and "memory:" in collision.seed_b_label
@@ -1744,7 +1819,8 @@ class ComputationalSerendipity:
             for i, node in enumerate(collision.chain_a.nodes):
                 arrow = "●" if i == 0 else "→"
                 marker = " ◉ COLLISION" if node == collision.collision_node_a else ""
-                print(f"   │  {arrow} {node.topic} [{node.domain}]{marker}")
+                g_icon = self._grounding_icon(node)
+                print(f"   │  {arrow} {node.topic} [{node.domain}]{marker} {g_icon}")
         print(f"   │")
 
         if is_temporal:
@@ -1761,7 +1837,8 @@ class ComputationalSerendipity:
                 for i, node in enumerate(collision.chain_b.nodes):
                     arrow = "●" if i == 0 else "→"
                     marker = " ◉ COLLISION" if node == collision.collision_node_b else ""
-                    print(f"   │  {arrow} {node.topic} [{node.domain}]{marker}")
+                    g_icon = self._grounding_icon(node)
+                    print(f"   │  {arrow} {node.topic} [{node.domain}]{marker} {g_icon}")
         print(f"   │")
 
         print(f"   ├─ COLLISION POINT")
@@ -1783,6 +1860,14 @@ class ComputationalSerendipity:
             print(f"   │")
 
         print(f"   ├─ CONFIDENCE: {collision.confidence.upper() if collision.confidence else 'PENDING'}")
+        if self._last_grounding_report:
+            r = self._last_grounding_report
+            print(f"   │  Grounding: {r.grounded_hops}✓ {r.inferred_hops}~ {r.speculative_hops}✗ "
+                  f"({r.grounding_ratio:.0%} verified)")
+            if r.mechanism_verified:
+                print(f"   │  Mechanism: ✓ {r.mechanism_description[:60]}")
+            if r.testable_prediction and r.is_falsifiable:
+                print(f"   │  Prediction: ✓ Falsifiable")
         print(f"   │")
 
         if collision.hypothesis:
@@ -1802,6 +1887,114 @@ class ComputationalSerendipity:
             print(f"      found a shared mechanism buried {collision.total_hops} hops deep.")
             print(f"      This is computational bisociation. This is Deep Thought.")
         print(f"{'═' * 70}")
+
+    def _print_grounding_report(self, report: GroundingReport) -> None:
+        """Display the epistemological verification report."""
+        print(f"\n{'─' * 70}")
+        print(f"🔬 EPISTEMOLOGICAL VERIFICATION REPORT")
+        print(f"{'─' * 70}")
+
+        total = report.total_hops
+        verified = report.grounded_hops + report.inferred_hops + report.speculative_hops
+        print(f"\n   ┌─ HOP GROUNDING ({verified}/{total} hops verified)")
+        if report.grounded_hops > 0:
+            bar_g = "█" * report.grounded_hops
+            print(f"   │  ✓ Grounded:    {bar_g} ({report.grounded_hops})")
+        if report.inferred_hops > 0:
+            bar_i = "▒" * report.inferred_hops
+            print(f"   │  ~ Inferred:    {bar_i} ({report.inferred_hops})")
+        if report.speculative_hops > 0:
+            bar_s = "░" * report.speculative_hops
+            print(f"   │  ✗ Speculative: {bar_s} ({report.speculative_hops})")
+        if report.unverified_hops > 0:
+            print(f"   │  ? Unverified:  {report.unverified_hops}")
+        print(f"   │  Grounding ratio: {report.grounding_ratio:.0%}")
+        print(f"   │")
+
+        print(f"   ├─ MECHANISM")
+        if report.mechanism_verified:
+            print(f"   │  ✓ VERIFIED: {report.mechanism_description[:100]}")
+        elif report.mechanism_description:
+            print(f"   │  ~ PLAUSIBLE: {report.mechanism_description[:100]}")
+        else:
+            print(f"   │  ✗ No specific mechanism identified")
+        print(f"   │")
+
+        print(f"   ├─ TESTABLE PREDICTION")
+        if report.testable_prediction:
+            if report.is_falsifiable:
+                print(f"   │  ✓ FALSIFIABLE:")
+            else:
+                print(f"   │  ~ NOT FALSIFIABLE:")
+            for line in report.testable_prediction.split('\n'):
+                if line.strip():
+                    print(f"   │  {line.strip()}")
+        else:
+            print(f"   │  (no prediction extracted)")
+        print(f"   │")
+
+        conf = report.confidence_level.upper()
+        conf_desc = {
+            "HIGH": "70%+ hops grounded, mechanism verified and published",
+            "MEDIUM": "40-70% grounded, mechanism plausible but not directly studied",
+            "LOW": "<40% grounded, mechanism speculative, but pattern is real",
+            "ORACLE": "Chain too complex to fully verify, but collision strength very high",
+        }.get(conf, "")
+        print(f"   └─ CONFIDENCE: {conf}")
+        print(f"      {conf_desc}")
+
+        if report.verification_sources:
+            print(f"\n   📎 Verification queries used: {len(report.verification_sources)}")
+        print(f"{'─' * 70}")
+
+    def _print_hypothesis_report(self, report) -> None:
+        """Display hypothesis verification statistics."""
+        print(f"\n{'─' * 70}")
+        print(f"🧪 HYPOTHESIS VERIFICATION TRACKER")
+        print(f"{'─' * 70}")
+
+        if report.total_hypotheses == 0:
+            print(f"   No hypotheses tracked yet. Run Deep Thought mode to generate some!")
+            print(f"{'─' * 70}")
+            return
+
+        print(f"\n   Total hypotheses generated: {report.total_hypotheses}")
+        print(f"   ┌─ VERIFICATION STATUS")
+        print(f"   │  ✓ Confirmed:  {report.verified_count}")
+        print(f"   │  ✗ Refuted:    {report.refuted_count}")
+        print(f"   │  ~ Partial:    {report.partial_count}")
+        print(f"   │  ? Unverified: {report.unverified_count}")
+        print(f"   │")
+
+        if report.verified_count + report.refuted_count > 0:
+            print(f"   ├─ ACCURACY")
+            print(f"   │  Verification rate: {report.verification_rate:.0%} "
+                  f"(confirmed / decided)")
+            print(f"   │")
+            print(f"   ├─ CONFIDENCE CALIBRATION")
+            if report.high_conf_accuracy > 0:
+                print(f"   │  HIGH confidence accuracy:   {report.high_conf_accuracy:.0%}")
+            if report.medium_conf_accuracy > 0:
+                print(f"   │  MEDIUM confidence accuracy: {report.medium_conf_accuracy:.0%}")
+            if report.low_conf_accuracy > 0:
+                print(f"   │  LOW confidence accuracy:    {report.low_conf_accuracy:.0%}")
+            if report.oracle_accuracy > 0:
+                print(f"   │  ORACLE accuracy:            {report.oracle_accuracy:.0%}")
+            print(f"   │")
+            print(f"   ├─ GROUNDING INSIGHTS")
+            print(f"   │  Avg grounding when confirmed: {report.avg_grounding_when_verified:.0%}")
+            print(f"   │  Avg grounding when refuted:   {report.avg_grounding_when_refuted:.0%}")
+            if report.optimal_grounding_range:
+                print(f"   │  Optimal grounding range:      {report.optimal_grounding_range}")
+            print(f"   │")
+            if report.mechanism_correlation > 0:
+                print(f"   └─ MECHANISM CORRELATION")
+                print(f"      When mechanism verified → {report.mechanism_correlation:.0%} confirmed by user")
+        else:
+            print(f"   │  (No hypotheses verified yet)")
+            print(f"   │  Use 'confirmed', 'refuted', or 'partial' after investigating a hypothesis")
+
+        print(f"{'─' * 70}")
 
     async def _show_serendipity_stats(self) -> None:
         """Display the serendipity self-evaluation report."""
