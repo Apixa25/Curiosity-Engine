@@ -1,5 +1,5 @@
 """
-LLM Adapter — Provider-agnostic interface for the Creativity Engine.
+LLM Adapter — Provider-agnostic interface for Computational Serendipity.
 
 Swap between OpenAI, Anthropic, or any other provider by changing
 the config. The rest of the engine only talks to LLMAdapter.

@@ -1,5 +1,5 @@
 """
-Voice Output — Text-to-Speech for the Creativity Engine.
+Voice Output — Text-to-Speech for Computational Serendipity.
 
 Gives the engine an actual voice so it speaks its interjections, observations,
 and direct responses aloud through the speakers — like a friend sitting next to you.

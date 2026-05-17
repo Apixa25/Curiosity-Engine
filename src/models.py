@@ -1,5 +1,5 @@
 """
-Data models for the Creativity Engine.
+Data models for Computational Serendipity.
 
 These are the core data structures that flow through the pipeline:
 Heartbeat → Context → Association Tree → Scoring → Interjection

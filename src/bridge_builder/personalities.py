@@ -1,5 +1,5 @@
 """
-Rotating Personalities — Multiple voices for the Creativity Engine.
+Rotating Personalities — Multiple voices for Computational Serendipity.
 
 Instead of always sounding the same, the engine rotates between personality
 archetypes that bring different energy and framing to interjections. A science

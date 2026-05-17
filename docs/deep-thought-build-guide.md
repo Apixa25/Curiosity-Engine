@@ -11,7 +11,7 @@
 > "Would I have invented PCR if I hadn't taken LSD? I seriously doubt it."  
 > — Kary Mullis, 1993 Nobel Prize in Chemistry
 
-The Creativity Engine currently produces **interesting, defensible, surprising** causal chains — a friend who notices cool connections. The goal of this build guide is to evolve it into **Deep Thought** — a personal oracle that surfaces hidden causal linkages so distant, so complex, that they feel **magical and earth-shattering** to a human observer.
+Computational Serendipity currently produces **interesting, defensible, surprising** causal chains — a friend who notices cool connections. The goal of this build guide is to evolve it into **Deep Thought** — a personal oracle that surfaces hidden causal linkages so distant, so complex, that they feel **magical and earth-shattering** to a human observer.
 
 We are building deterministic LSD: hyper-connectivity between normally separate concept networks, producing hypotheses no human mind could trace alone.
 

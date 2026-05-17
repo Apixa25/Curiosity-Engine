@@ -1,6 +1,6 @@
-# 🧠 Creativity Engine
+# 🧠 Computational Serendipity
 
-**A proactive AI companion that simulates genuine creativity through hidden causal complexity.**
+**A proactive AI companion that simulates genuine serendipity through hidden causal complexity.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
@@ -9,13 +9,13 @@
 
 ## What Is This?
 
-The Creativity Engine is an AI companion that **hangs out with you** — like a creative friend sitting next to you while you work. It doesn't wait for you to ask it questions. It watches, listens, and thinks on its own. Every few minutes, it might tap you on the shoulder with something surprising:
+Computational Serendipity is an AI companion that **hangs out with you** — like a creative friend sitting next to you while you work. It doesn't wait for you to ask it questions. It watches, listens, and thinks on its own. Every few minutes, it might tap you on the shoulder with something surprising:
 
 > *"Oh hey — did you know that NASA actually studied how construction workers communicate under stress when they were designing protocols for ISS repair crews? Turns out the hand signals are almost identical."*
 
-It's not a chatbot. It's not an assistant. It's a **companion with creativity.**
+It's not a chatbot. It's not an assistant. It's a **companion with serendipity.**
 
-You can also talk to it directly — just say **"Hey Creativity"** and it responds immediately, like a friend who was already paying attention.
+You can also talk to it directly — just say **"Hey Serendipity"** and it responds immediately, like a friend who was already paying attention.
 
 ---
 
@@ -44,8 +44,8 @@ Run `python -m src.main --live` and the engine becomes a persistent background c
 - Interactive terminal commands (see [Command Reference](#live-mode-command-reference))
 - Real-time context updates as you work
 
-### 💬 Direct Conversation ("Hey Creativity")
-- **Wake word detection** — Say "Hey Creativity" and the engine responds immediately
+### 💬 Direct Conversation ("Hey Serendipity")
+- **Wake word detection** — Say "Hey Serendipity" and the engine responds immediately
 - **Direct vs. Overheard classification** — It knows the difference between you talking to IT and you talking to someone else nearby
 - **Conversational personality** — Responds like a friend, not an assistant — warm, curious, goes on tangents
 - **Conversation history** — Remembers what you've talked about within a session
@@ -215,15 +215,15 @@ What you see in transparency mode:
       That's the whole point.
 ```
 
-### 📊 Creativity Self-Evaluation
+### 📊 Serendipity Self-Evaluation
 The engine scores its own creative performance using **Mednick/Kenett-inspired metrics** and tracks an **AHA! rate** over time:
 
 - **AHA! rate** — Percentage of interjections scoring above 0.65 (genuinely creative)
 - **Remote Association rate** — How often the engine makes genuinely far-apart connections (high semantic distance)
 - **Mednick/Kenett dimension averages** — Track each of the 5 scoring dimensions independently over time
-- **Trend detection** — Compares first half vs. second half of history to determine if creativity is improving, declining, or steady
+- **Trend detection** — Compares first half vs. second half of history to determine if serendipity is improving, declining, or steady
 - **User alignment** — Measures how well the engine's "AHA!" moments match your ratings
-- **Strongest/Weakest dimension** — Identifies what's driving creativity and where to improve
+- **Strongest/Weakest dimension** — Identifies what's driving serendipity and where to improve
 - **Beautiful terminal report** — Visual bar charts, progress indicators, and session breakdowns
 
 Access with the `stats` command in live mode.
@@ -245,7 +245,7 @@ Access with the `stats` command in live mode.
 
 ```
                         ┌──────────────────────────────┐
-                        │   "Hey Creativity, what       │
+                        │   "Hey Serendipity, what      │
                         │    do you think about X?"     │
                         └─────────────┬────────────────┘
                                       │ (wake word detected)
@@ -290,8 +290,8 @@ Access with the `stats` command in live mode.
 ### Installation
 
 ```bash
-git clone https://github.com/Apixa25/Curiosity-Engine.git
-cd Curiosity-Engine
+git clone https://github.com/Apixa25/Computational-Serendipity.git
+cd Computational-Serendipity
 
 pip install -r requirements.txt
 ```
@@ -351,7 +351,7 @@ python -m src.main --devices
 | Command | What It Does |
 |---|---|
 | Hold **Shift+Z** | Push-to-talk (record while held) |
-| Say "Hey Creativity" | Voice wake word triggers immediate response |
+| Say "Hey Serendipity" | Voice wake word triggers immediate response |
 | `mute` | Turn off voice output (text only) |
 | `unmute` | Turn voice back on |
 | `voice <name>` | Switch voice (alloy/echo/fable/onyx/nova/shimmer) |
@@ -365,14 +365,14 @@ python -m src.main --devices
 | `👎` or `bad` | Rate last interjection 1/5 |
 | `rate 1-5` | Rate last interjection on a 1-5 scale |
 
-### Creativity & Analysis
+### Serendipity & Analysis
 
 | Command | What It Does |
 |---|---|
 | `reveal` / `show chain` / `why` | Show the full causal chain behind the last interjection |
 | `transparency` | Toggle auto-show of causal chains after every interjection |
 | `transparency off` / `magic` | Return to the illusion of spontaneous thought |
-| `stats` | Show creativity self-evaluation (AHA! rate, trends, metrics) |
+| `stats` | Show serendipity self-evaluation (AHA! rate, trends, metrics) |
 
 ### Collaboration
 
@@ -386,7 +386,7 @@ python -m src.main --devices
 ## Project Structure
 
 ```
-Curiosity-Engine/
+Computational-Serendipity/
 ├── project-vision.md              # Philosophy, principles, success criteria
 ├── TODO.md                        # Remaining work tracker
 ├── future-ideas.md                # Deferred features (desktop widget, image gen, walk mode)
@@ -395,7 +395,7 @@ Curiosity-Engine/
 ├── docs/
 │   ├── architecture-spec.md       # Full system component design
 │   ├── input-pipeline-spec.md     # Multimodal perception & novelty weighting
-│   └── creativity-engine-spec.md  # Association tree, scoring, bridge builder
+│   └── computational-serendipity-spec.md  # Association tree, scoring, bridge builder
 ├── src/
 │   ├── main.py                    # 🎛️  Orchestrator — live mode, heartbeat loop, all commands
 │   ├── models.py                  # 📦  Core data models (Node, Chain, Score, Interjection, Context)
@@ -427,7 +427,7 @@ Curiosity-Engine/
 │   │   ├── store.py               # 🧠  ChromaDB persistent memory (chains, ratings, search)
 │   │   ├── incubation.py          # 🥚  Incubation queue (re-score, promote, daily reflection)
 │   │   ├── profile.py             # 👤  Auto-generated user profile from rating history
-│   │   └── analytics.py           # 📊  Creativity self-evaluation (AHA! rate, Mednick metrics)
+│   │   └── analytics.py           # 📊  Serendipity self-evaluation (AHA! rate, Mednick metrics)
 │   ├── output/
 │   │   └── voice.py               # 🔊  OpenAI TTS with 6 voices, streaming playback
 │   └── embeddings/
@@ -475,7 +475,7 @@ A typical creative cycle makes **~15–20 LLM API calls**:
 | Fact extraction | 1 | Pull interesting facts from search results |
 | Bridge building | 1 | Write the final conversational interjection |
 
-Direct conversation responses ("Hey Creativity") use **1 LLM call** for an immediate reply.
+Direct conversation responses ("Hey Serendipity") use **1 LLM call** for an immediate reply.
 Co-creation turns use **1 LLM call** each.
 
 ---

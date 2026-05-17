@@ -1,5 +1,5 @@
 """
-Creativity Engine — Proof of Concept Runner
+Computational Serendipity — Proof of Concept Runner
 
 Three modes:
     python -m src.main                          # interactive (manual fire)
@@ -34,11 +34,11 @@ from src.embeddings.provider import EmbeddingProvider, EmbeddingConfig
 from src.memory.store import MemoryStore, MemoryConfig
 from src.memory.incubation import IncubationQueue
 from src.memory.profile import ProfileBuilder
-from src.memory.analytics import CreativityAnalytics
+from src.memory.analytics import SerendipityAnalytics
 from src.models import ContextSnapshot, Interjection
 
 
-class CreativityEngine:
+class ComputationalSerendipity:
     """Orchestrates the full creative pipeline."""
 
     def __init__(self, config: EngineConfig | None = None, debug_audio: bool = False):
@@ -112,7 +112,7 @@ class CreativityEngine:
             profile_path=self.cfg.memory.persist_directory + "/user_profile.json",
             rebuild_every_n_ratings=self.cfg.memory.profile_rebuild_every,
         )
-        self.analytics = CreativityAnalytics(memory=self.memory)
+        self.analytics = SerendipityAnalytics(memory=self.memory)
         self._overheard_buffer: list[str] = []
 
     def enable_multimodal(self) -> None:
@@ -319,7 +319,7 @@ class CreativityEngine:
         self.current_context = initial_context
 
         print("=" * 70)
-        print("🧠 CREATIVITY ENGINE — Live Companion Mode")
+        print("🧠 COMPUTATIONAL SERENDIPITY — Live Companion Mode")
         print("=" * 70)
 
         import os
@@ -359,7 +359,7 @@ class CreativityEngine:
         print("     Just type anything  → Update your context (what you're working on)")
         if has_mic:
             print("     Hold Shift+Z        → Push-to-talk (record while held)")
-            print("     'Hey Creativity'    → Voice wake word (also works)")
+            print("     'Hey Serendipity'   → Voice wake word (also works)")
         print("     'not now'           → Skip next 2 heartbeats")
         print("     'status'            → Show engine status")
         print("     'fire'              → Force a heartbeat right now")
@@ -373,7 +373,7 @@ class CreativityEngine:
         print("     'done'              → End brainstorm, back to normal")
         print("     'reveal'            → Show the full causal chain behind last interjection")
         print("     'transparency'      → Auto-show causal chains (toggle on/off)")
-        print("     'stats'             → Creativity metrics and AHA! rate over time")
+        print("     'stats'             → Serendipity metrics and AHA! rate over time")
         print("     'quit'              → Shut down")
         print(f"{'─' * 70}")
 
@@ -430,7 +430,7 @@ class CreativityEngine:
         self._listening = False
         self.git_monitor.stop()
         self.incubation.stop()
-        print("\n👋 Creativity Engine shutting down. Stay creative!")
+        print("\n👋 Computational Serendipity shutting down. Stay creative!")
         if self.vision:
             self.vision.release()
 
@@ -487,7 +487,7 @@ class CreativityEngine:
             tier_label = tier["name"].upper()
             personality_tag = f" | {self.bridge._last_personality.emoji} {self.bridge._last_personality.name}" if self.bridge._last_personality else ""
             print(f"\n{'═' * 70}")
-            print(f"💬 CREATIVITY ENGINE SAYS  [{tier_label} | score: {interjection.scoring.total:.2f}{personality_tag}]:\n")
+            print(f"💬 SERENDIPITY SAYS  [{tier_label} | score: {interjection.scoring.total:.2f}{personality_tag}]:\n")
             print(f"   \"{interjection.interjection_text}\"")
             print(f"\n{'═' * 70}")
             self._print_citations(interjection)
@@ -506,7 +506,7 @@ class CreativityEngine:
             observation = await self.bridge.build_observation(ctx)
             if observation:
                 print(f"\n{'─' * 50}")
-                print(f"💭 CREATIVITY OBSERVES  [novelty: {ctx.overall_novelty:.2f}]:\n")
+                print(f"💭 SERENDIPITY OBSERVES  [novelty: {ctx.overall_novelty:.2f}]:\n")
                 print(f"   \"{observation}\"")
                 print(f"{'─' * 50}")
                 self.responder.add_engine_interjection(observation)
@@ -547,7 +547,7 @@ class CreativityEngine:
 
             if review:
                 print(f"\n{'═' * 70}")
-                print(f"💬 CREATIVITY ON YOUR COMMIT [{commit_info.hash_short}]:\n")
+                print(f"💬 SERENDIPITY ON YOUR COMMIT [{commit_info.hash_short}]:\n")
                 print(f"   \"{review}\"")
                 print(f"\n{'═' * 70}")
                 self.responder.add_engine_interjection(review)
@@ -692,7 +692,7 @@ class CreativityEngine:
     async def _listening_loop(self) -> None:
         """
         Background listener for passive context (overheard speech).
-        Also still detects wake word "Hey Creativity" as a fallback.
+        Also still detects wake word "Hey Serendipity" as a fallback.
         Primary direct interaction is via push-to-talk (Shift+Z).
         """
         self._listening = True
@@ -756,7 +756,7 @@ class CreativityEngine:
                     await self._handle_direct_address(result.message or transcript)
                 elif result.mode == "OVERHEARD":
                     if was_in_conversation:
-                        print(f"   [Listener] Conversation ended -- back to listening for 'Hey Creativity'")
+                        print(f"   [Listener] Conversation ended -- back to listening for 'Hey Serendipity'")
                     if transcript.strip():
                         self._overheard_buffer.append(transcript.strip())
                         if len(self._overheard_buffer) > 5:
@@ -810,7 +810,7 @@ class CreativityEngine:
     ]
 
     async def _handle_direct_address(self, message: str) -> None:
-        """The user said 'Hey Creativity' — respond immediately."""
+        """The user said 'Hey Serendipity' — respond immediately."""
         print(f"\n   +{'=' * 48}+")
         print(f"   |  DIRECT ADDRESS DETECTED                     |")
         print(f"   +{'=' * 48}+")
@@ -843,7 +843,7 @@ class CreativityEngine:
         )
 
         print(f"\n{'═' * 70}")
-        print(f"💬 CREATIVITY RESPONDS:\n")
+        print(f"💬 SERENDIPITY RESPONDS:\n")
         print(f"   \"{reply}\"")
         print(f"\n{'═' * 70}")
         if search_sources:
@@ -1010,7 +1010,7 @@ class CreativityEngine:
                 print("   ✨ Transparency OFF — back to the illusion of spontaneous thought")
 
             elif cmd == "stats":
-                await self._show_creativity_stats()
+                await self._show_serendipity_stats()
 
             elif cmd in ("👍", "good", "like", "thumbs up", "nice"):
                 if self.memory.rate_last_interjection(5):
@@ -1190,8 +1190,8 @@ class CreativityEngine:
         print(f"      That's the whole point.")
         print(f"{'─' * 70}")
 
-    async def _show_creativity_stats(self) -> None:
-        """Display the creativity self-evaluation report."""
+    async def _show_serendipity_stats(self) -> None:
+        """Display the serendipity self-evaluation report."""
         if not self.memory.is_available:
             print("   ❌ Memory not available — stats require ChromaDB")
             return
@@ -1211,7 +1211,7 @@ class CreativityEngine:
         """Fire a single heartbeat cycle — for testing and demos."""
         self.embedder.initialize()
         print("=" * 70)
-        print("🧠 CREATIVITY ENGINE — Proof of Concept")
+        print("🧠 COMPUTATIONAL SERENDIPITY — Proof of Concept")
         print("=" * 70)
 
         ctx = await self.heartbeat.fire_once(seed_topic)
@@ -1264,7 +1264,7 @@ class CreativityEngine:
 
             elapsed = time.time() - t0
             print(f"{'═' * 70}")
-            print(f"💬 CREATIVITY ENGINE SAYS:\n")
+            print(f"💬 SERENDIPITY SAYS:\n")
             print(f"   \"{interjection.interjection_text}\"")
             print(f"\n{'═' * 70}")
             print(f"\n⏱️  Total pipeline time: {elapsed:.1f}s")
@@ -1303,7 +1303,7 @@ class CreativityEngine:
         """Interactive mode — enter seed topics and watch the engine think."""
         self.embedder.initialize()
         print("=" * 70)
-        print("🧠 CREATIVITY ENGINE — Interactive Mode")
+        print("🧠 COMPUTATIONAL SERENDIPITY — Interactive Mode")
         print("=" * 70)
         print(f"\nProvider: {self.cfg.llm.provider} | Model: {self.cfg.llm.model}")
         search_status = "✅ Tavily" if self.searcher.is_available else "⚠️  No API key (using LLM fallback)"
@@ -1315,13 +1315,13 @@ class CreativityEngine:
             try:
                 topic = input("🎯 Seed topic: ").strip()
             except (EOFError, KeyboardInterrupt):
-                print("\n\n👋 Creativity Engine shutting down. Stay creative!")
+                print("\n\n👋 Computational Serendipity shutting down. Stay creative!")
                 break
 
             if not topic:
                 continue
             if topic.lower() in ("quit", "exit", "q"):
-                print("\n👋 Creativity Engine shutting down. Stay creative!")
+                print("\n👋 Computational Serendipity shutting down. Stay creative!")
                 break
 
             await self.run_single(topic)
@@ -1377,7 +1377,7 @@ async def main():
         args.remove("--debug-audio")
 
     config = load_config()
-    engine = CreativityEngine(config, debug_audio=debug_audio)
+    engine = ComputationalSerendipity(config, debug_audio=debug_audio)
 
     if "--live" in args:
         args.remove("--live")

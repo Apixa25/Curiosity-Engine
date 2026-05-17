@@ -1,5 +1,5 @@
 """
-Heartbeat — The Creativity Clock.
+Heartbeat — The Serendipity Clock.
 
 A random timer that fires at unpredictable intervals, creating the hidden
 causation that produces the appearance of spontaneous thought.

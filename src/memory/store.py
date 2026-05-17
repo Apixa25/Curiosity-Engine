@@ -1,5 +1,5 @@
 """
-Memory Store — Persistent memory for the Creativity Engine.
+Memory Store — Persistent memory for Computational Serendipity.
 
 Uses ChromaDB for vector storage and SQLite for structured metadata.
 This is what turns the engine from a stateless demo into a long-term friend.
@@ -45,7 +45,7 @@ class StoredChain:
     context_at_time: str = ""
     rescore_count: int = 0
     last_rescore: float = 0.0
-    # Individual scoring metrics (for creativity self-evaluation)
+    # Individual scoring metrics (for serendipity self-evaluation)
     score_semantic_distance: float = 0.0
     score_domain_crossings: float = 0.0
     score_surprise: float = 0.0

@@ -1,4 +1,4 @@
-# 🚀 Creativity Engine — Future Ideas
+# 🚀 Computational Serendipity — Future Ideas
 
 Ideas that are exciting but not yet the right priority. Revisit when the core engine is stable and the memory system has real data.
 

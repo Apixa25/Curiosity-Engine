@@ -28,27 +28,26 @@ class AddressResult:
 
 
 WAKE_PHRASES = [
-    "hey creativity",
-    "hey creative",
-    "hey, creativity",
-    "hey, creative",
-    "okay creativity",
-    "ok creativity",
-    "okay creative",
-    "ok creative",
-    "yo creativity",
-    "yo creative",
-    "hi creativity",
-    "hi creative",
-    "hello creativity",
-    "creativity,",
-    "creativity!",
-    "hey creativi",
-    "a creativity",
-    "hey, creativi",
+    "hey serendipity",
+    "hey serendipit",
+    "hey, serendipity",
+    "hey, serendipit",
+    "okay serendipity",
+    "ok serendipity",
+    "okay serendipit",
+    "ok serendipit",
+    "yo serendipity",
+    "yo serendipit",
+    "hi serendipity",
+    "hi serendipit",
+    "hello serendipity",
+    "serendipity,",
+    "serendipity!",
+    "a serendipity",
+    "hey seren",
 ]
 
-CLASSIFY_PROMPT = """You are analyzing a short audio transcript to determine if the speaker is talking TO an AI assistant named "Creativity" or just talking to someone else nearby (overheard).
+CLASSIFY_PROMPT = """You are analyzing a short audio transcript to determine if the speaker is talking TO an AI assistant named "Serendipity" or just talking to someone else nearby (overheard).
 
 Transcript: "{transcript}"
 
@@ -58,7 +57,7 @@ Classify this as one of:
 - DIRECT: The speaker is addressing the AI. Signs: questions directed at "you", requests for opinions, statements that expect a response, phrases like "what do you think", "can you", "tell me about", etc.
 - OVERHEARD: The speaker is talking to someone else, on a phone call, thinking out loud without expecting a response, or the content is clearly part of another conversation.
 
-Most speech that doesn't contain the wake word "Hey Creativity" is OVERHEARD.
+Most speech that doesn't contain the wake word "Hey Serendipity" is OVERHEARD.
 Only classify as DIRECT if you are fairly confident the speaker wants the AI to respond.
 
 Return ONLY one word: DIRECT or OVERHEARD"""

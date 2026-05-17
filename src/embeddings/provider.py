@@ -1,5 +1,5 @@
 """
-Embedding Provider — Real semantic vectors for the Creativity Engine.
+Embedding Provider — Real semantic vectors for Computational Serendipity.
 
 Replaces the heuristic-based "semantic distance" proxy with actual
 cosine distances in embedding space. This is what lets the engine

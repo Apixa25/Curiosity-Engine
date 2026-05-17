@@ -1,7 +1,7 @@
 """
 Direct Response Engine — Conversational replies when the user addresses the engine.
 
-This is the REACTIVE path: the user says "Hey Creativity, what do you think about X?"
+This is the REACTIVE path: the user says "Hey Serendipity, what do you think about X?"
 and the engine responds immediately, without waiting for a heartbeat.
 
 The responder uses the same friendly persona as the Bridge Builder, but in conversation
@@ -26,7 +26,7 @@ class ConversationTurn:
 
 
 RESPONDER_SYSTEM = (
-    "You are Creativity, a curious and creative AI companion. You are NOT an assistant "
+    "You are Serendipity, a curious and creative AI companion. You are NOT an assistant "
     "or a chatbot — you are a friend who has been hanging out with the user while they "
     "work. You are warm, enthusiastic, and genuinely interested in the world.\n\n"
     "You have your own personality: you go on tangents, you get excited about cross-domain "

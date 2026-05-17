@@ -1,4 +1,4 @@
-# Creativity Engine — Remaining Work
+# Computational Serendipity — Remaining Work
 
 **Last Updated:** May 10, 2026
 
@@ -6,7 +6,7 @@
 
 ## Completed
 
-- [x] Heartbeat (Creativity Clock) — random timer, continuous loop, backoff, fire command
+- [x] Heartbeat (Serendipity Clock) — random timer, continuous loop, backoff, fire command
 - [x] Association Tree Generator — ternary branching, depth 4-7, depth-first pruning, domain classification
 - [x] Interest Scorer — 5-metric weighted formula, pre-filtering, calibrated prompts
 - [x] Bridge Builder — natural interjection generation, hides chain, uses search facts
@@ -26,7 +26,7 @@
 ## Priority 1 — Direct Address & Conversation ✅ COMPLETE
 
 ### Direct Address Detector ✅
-- [x] Wake word detection ("Hey Creativity") on audio transcripts
+- [x] Wake word detection ("Hey Serendipity") on audio transcripts
 - [x] Classify audio as DIRECT (talking to engine) vs OVERHEARD (talking to someone else)
 - [x] DIRECT bypasses heartbeat, triggers immediate response
 - [x] OVERHEARD feeds into context assembler at reduced weight

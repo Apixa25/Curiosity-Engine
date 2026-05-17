@@ -1,5 +1,5 @@
 """
-Configuration loader for the Creativity Engine.
+Configuration loader for Computational Serendipity.
 
 Reads from config.yaml (user's copy) or falls back to config.example.yaml.
 """

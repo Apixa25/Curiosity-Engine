@@ -1,4 +1,4 @@
-# 🏗️ Architecture Spec — Creativity Engine
+# 🏗️ Architecture Spec — Computational Serendipity
 
 **Version:** 0.1 (Draft)  
 **Last Updated:** May 2026  
@@ -8,11 +8,11 @@
 
 ## System Overview
 
-The Creativity Engine is a **proactive multimodal AI companion** that runs as a persistent background process. It perceives the user's environment through vision, audio, and text; generates creative associations on a timer-driven heartbeat; and delivers interjections through a conversational interface.
+Computational Serendipity is a **proactive multimodal AI companion** that runs as a persistent background process. It perceives the user's environment through vision, audio, and text; generates creative associations on a timer-driven heartbeat; and delivers interjections through a conversational interface.
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                      CREATIVITY ENGINE                           │
+│                  COMPUTATIONAL SERENDIPITY                       │
 │                                                                 │
 │  ┌────────────────────────────────────────────────────────┐     │
 │  │              INPUT PIPELINE (Multimodal)                │     │
@@ -117,7 +117,7 @@ The input pipeline continuously ingests data from three modalities and passes it
 | **Source** | User's microphone |
 | **Processing** | Speech-to-text (STT) engine → text transcript |
 | **Mode Detection** | Classify as DIRECT_ADDRESS or OVERHEARD |
-| **Direct Address Cues** | Wake word ("Hey Creativity"), name detection, gaze toward camera |
+| **Direct Address Cues** | Wake word ("Hey Serendipity"), name detection, gaze toward camera |
 | **Overheard Cues** | No wake word, speech directed elsewhere, phone call patterns |
 | **Output** | Transcript text + mode label (DIRECT / OVERHEARD) |
 
@@ -178,7 +178,7 @@ The Context Assembler produces a new snapshot on every heartbeat AND whenever di
 
 ---
 
-### 3. Heartbeat (Creativity Clock)
+### 3. Heartbeat (Serendipity Clock)
 
 The random timer that creates the illusion of spontaneous thought.
 

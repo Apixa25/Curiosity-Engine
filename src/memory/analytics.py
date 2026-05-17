@@ -1,9 +1,9 @@
 """
-Creativity Self-Evaluation & Analytics 📊
+Serendipity Self-Evaluation & Analytics 📊
 
 Scores each output using Mednick/Kenett-inspired metrics and tracks
 an "AHA! rate" over time, giving data-driven insights into the engine's
-creative performance.
+serendipitous performance.
 
 Mednick's Remote Associates Theory: creativity = connecting distant ideas.
 Kenett's Network Science model: creative thinkers have more flexible semantic networks.
@@ -29,7 +29,7 @@ CROSS_DOMAIN_THRESHOLD = 2       # 2+ domain crossings = cross-domain creative l
 
 
 @dataclass
-class CreativitySnapshot:
+class SerendipitySnapshot:
     """Point-in-time metrics for a single creative output."""
     chain_id: str
     timestamp: float
@@ -45,8 +45,8 @@ class CreativitySnapshot:
 
 
 @dataclass
-class CreativityReport:
-    """Aggregated creativity metrics over a time window."""
+class SerendipityReport:
+    """Aggregated serendipity metrics over a time window."""
     total_interjections: int = 0
     aha_count: int = 0
     aha_rate: float = 0.0                  # % of interjections that are AHA! moments
@@ -68,11 +68,11 @@ class CreativityReport:
     avg_user_rating: float = 0.0
     user_aha_alignment: float = 0.0        # correlation between high scores and high ratings
 
-    # Trend: is creativity improving?
+    # Trend: is serendipity improving?
     trend_direction: str = "—"             # "↑ improving", "↓ declining", "→ steady"
     trend_detail: str = ""
 
-    # Top scoring dimensions (what's driving creativity)
+    # Top scoring dimensions (what's driving serendipity)
     strongest_dimension: str = ""
     weakest_dimension: str = ""
 
@@ -82,7 +82,7 @@ class CreativityReport:
     last_timestamp: float = 0.0
 
 
-class CreativityAnalytics:
+class SerendipityAnalytics:
     """Analyzes the engine's creative performance over time.
 
     Uses stored chains with their full scoring breakdowns to compute
@@ -92,11 +92,11 @@ class CreativityAnalytics:
     def __init__(self, memory: MemoryStore):
         self.memory = memory
 
-    def _chains_to_snapshots(self, chains: list[StoredChain]) -> list[CreativitySnapshot]:
-        """Convert stored chains to creativity snapshots."""
+    def _chains_to_snapshots(self, chains: list[StoredChain]) -> list[SerendipitySnapshot]:
+        """Convert stored chains to serendipity snapshots."""
         snapshots = []
         for c in chains:
-            snap = CreativitySnapshot(
+            snap = SerendipitySnapshot(
                 chain_id=c.id,
                 timestamp=c.timestamp,
                 total_score=c.score,
@@ -112,8 +112,8 @@ class CreativityAnalytics:
             snapshots.append(snap)
         return snapshots
 
-    def generate_report(self, hours: float | None = None) -> CreativityReport:
-        """Generate a full creativity report.
+    def generate_report(self, hours: float | None = None) -> SerendipityReport:
+        """Generate a full serendipity report.
 
         Args:
             hours: If set, only include chains from the last N hours.
@@ -121,7 +121,7 @@ class CreativityAnalytics:
         """
         all_chains = self.memory.get_all_fired()
         if not all_chains:
-            return CreativityReport()
+            return SerendipityReport()
 
         if hours is not None:
             cutoff = time.time() - (hours * 3600)
@@ -132,7 +132,7 @@ class CreativityAnalytics:
             period_label = "all time"
 
         if not chains:
-            return CreativityReport(period_label=period_label)
+            return SerendipityReport(period_label=period_label)
 
         snapshots = self._chains_to_snapshots(chains)
         n = len(snapshots)
@@ -195,7 +195,7 @@ class CreativityAnalytics:
             "novelty": "Novelty (freshness vs. past outputs)",
         }
 
-        return CreativityReport(
+        return SerendipityReport(
             total_interjections=n,
             aha_count=aha_count,
             aha_rate=(aha_count / n) * 100 if n else 0,
@@ -221,12 +221,12 @@ class CreativityAnalytics:
             last_timestamp=snapshots[-1].timestamp if snapshots else 0,
         )
 
-    def format_report(self, report: CreativityReport) -> str:
-        """Format a CreativityReport into a beautiful terminal display."""
+    def format_report(self, report: SerendipityReport) -> str:
+        """Format a SerendipityReport into a beautiful terminal display."""
         if report.total_interjections == 0:
             return (
                 f"\n{'═' * 70}\n"
-                f"📊 CREATIVITY SELF-EVALUATION\n"
+                f"📊 SERENDIPITY SELF-EVALUATION\n"
                 f"{'═' * 70}\n"
                 f"   No interjections recorded yet. Fire some heartbeats first! 🚀\n"
                 f"{'═' * 70}"
@@ -239,7 +239,7 @@ class CreativityAnalytics:
 
         lines = [
             f"\n{'═' * 70}",
-            f"📊 CREATIVITY SELF-EVALUATION  [{report.period_label}]",
+            f"📊 SERENDIPITY SELF-EVALUATION  [{report.period_label}]",
             f"   {start} → {end}",
             f"{'═' * 70}",
             f"",
@@ -299,7 +299,7 @@ class CreativityAnalytics:
         if rate >= 50:
             label = "🔥 On fire!"
         elif rate >= 30:
-            label = "✨ Solid creativity"
+            label = "✨ Solid serendipity"
         elif rate >= 15:
             label = "🌱 Growing"
         else:
