@@ -91,12 +91,14 @@ class MultiSeedGenerator:
         dt_config: DeepThoughtConfig,
         embedder: EmbeddingProvider | None = None,
         memory=None,
+        causation_graph=None,
     ):
         self.llm = llm
         self.tree_config = tree_config
         self.dt_config = dt_config
         self.embedder = embedder
         self.memory = memory
+        self.causation_graph = causation_graph
 
     def _create_deep_thought_tree_gen(self) -> AssociationTreeGenerator:
         """Create a tree generator configured for Deep Thought mode."""
@@ -174,7 +176,12 @@ class MultiSeedGenerator:
         """Build the set of seeds for this cycle.
 
         Always includes current_context. Other seeds are added based on
-        available resources (memory, LLM for inverse) up to parallel_seeds limit.
+        available resources (memory, graph periphery, LLM for inverse)
+        up to parallel_seeds limit.
+
+        When the causation graph is available, one seed comes from graph
+        periphery (frontier territory with maximum collision potential) and
+        one from high-affinity nodes (concepts the user has responded to).
         """
         seeds: dict[str, str] = {}
         target_count = self.dt_config.parallel_seeds
@@ -190,14 +197,22 @@ class MultiSeedGenerator:
             seed_tasks.append(("memory", self._get_memory_seed()))
 
         if target_count >= 4:
-            domain = random.choice(list(PERSONALITY_SEED_PROMPTS.keys()))
-            seed_tasks.append((f"personality ({domain})", self._generate_personality_seed(domain)))
+            graph_seed = self._get_graph_periphery_seed()
+            if graph_seed:
+                seeds["graph_frontier"] = graph_seed
+            else:
+                domain = random.choice(list(PERSONALITY_SEED_PROMPTS.keys()))
+                seed_tasks.append((f"personality ({domain})", self._generate_personality_seed(domain)))
 
         if target_count >= 5:
-            remaining_domains = [d for d in PERSONALITY_SEED_PROMPTS if f"personality ({d})" not in seeds]
-            if remaining_domains:
-                domain2 = random.choice(remaining_domains)
-                seed_tasks.append((f"personality ({domain2})", self._generate_personality_seed(domain2)))
+            affinity_seed = self._get_graph_affinity_seed()
+            if affinity_seed:
+                seeds["graph_affinity"] = affinity_seed
+            else:
+                remaining_domains = [d for d in PERSONALITY_SEED_PROMPTS if f"personality ({d})" not in seeds]
+                if remaining_domains:
+                    domain2 = random.choice(remaining_domains)
+                    seed_tasks.append((f"personality ({domain2})", self._generate_personality_seed(domain2)))
 
         if seed_tasks:
             labels = [label for label, _ in seed_tasks]
@@ -216,7 +231,7 @@ class MultiSeedGenerator:
         try:
             prompt = INVERSE_SEED_PROMPT.format(context=context)
             response = await self.llm.generate(prompt, temperature=1.0)
-            return response.strip().strip('"').strip("'")
+            return response.text.strip().strip('"').strip("'")
         except Exception:
             return ""
 
@@ -237,6 +252,28 @@ class MultiSeedGenerator:
         try:
             prompt = PERSONALITY_SEED_PROMPTS.get(domain, "Name one obscure topic. Return ONLY the topic.")
             response = await self.llm.generate(prompt, temperature=1.1)
-            return response.strip().strip('"').strip("'")
+            return response.text.strip().strip('"').strip("'")
         except Exception:
             return ""
+
+    def _get_graph_periphery_seed(self) -> str | None:
+        """Get a frontier node from the causation graph for maximum collision potential.
+
+        Periphery nodes sit at the edges of the user's known concept universe.
+        Chains starting from here explore genuinely new territory — maximizing
+        the chance of unexpected collisions with other chains.
+        """
+        if not self.causation_graph or self.causation_graph.node_count < 10:
+            return None
+        return self.causation_graph.get_periphery_seed()
+
+    def _get_graph_affinity_seed(self) -> str | None:
+        """Get a high-affinity node — something the user has rated highly.
+
+        Seeds from high-affinity nodes produce chains the user is more likely
+        to find interesting, based on their rating history propagated through
+        the graph.
+        """
+        if not self.causation_graph or self.causation_graph.node_count < 10:
+            return None
+        return self.causation_graph.get_high_affinity_seed()

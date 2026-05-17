@@ -38,6 +38,7 @@ from src.memory.analytics import SerendipityAnalytics
 from src.association_engine.multi_seed import MultiSeedGenerator
 from src.association_engine.collision_engine import CollisionEngine
 from src.problems.stuck_queue import StuckQueue
+from src.memory.causation_graph import CausationGraph
 from src.models import ContextSnapshot, Interjection, CollisionResult, AssociationNode
 
 
@@ -128,6 +129,9 @@ class ComputationalSerendipity:
             embedder=self.embedder,
             persist_path=self.cfg.memory.persist_directory + "/problems.json",
         )
+        self.causation_graph: CausationGraph = CausationGraph(
+            persist_path=self.cfg.memory.persist_directory + "/causation_graph.json",
+        )
         if self._deep_thought_active:
             self.multi_seed = MultiSeedGenerator(
                 llm=self.llm,
@@ -135,6 +139,7 @@ class ComputationalSerendipity:
                 dt_config=self.cfg.deep_thought,
                 embedder=self.embedder,
                 memory=self.memory,
+                causation_graph=self.causation_graph,
             )
             self.collision_engine = CollisionEngine(
                 llm=self.llm,
@@ -501,6 +506,12 @@ class ComputationalSerendipity:
             if stored > 0 and self._deep_thought_active:
                 print(f"   ⏳ Stored {stored} intermediate nodes for cross-temporal memory")
 
+        if chain.nodes:
+            new_nodes = self.causation_graph.add_chain(chain.nodes, chain_id=chain_id)
+            self.causation_graph.save()
+            if new_nodes > 0 and self._deep_thought_active:
+                print(f"   🕸️  Graph: +{new_nodes} nodes (total: {self.causation_graph.node_count} nodes, {self.causation_graph.edge_count} edges)")
+
     async def _check_cross_temporal(
         self, chains: list, verbose: bool = False
     ) -> CollisionResult | None:
@@ -706,6 +717,8 @@ class ComputationalSerendipity:
         print("     'problems'          → List all active stuck problems")
         print("     'forget <id>'       → Remove a stuck problem")
         print("     'memory'            → Cross-temporal memory status (stored nodes + chains)")
+        print("     'graph'             → Personal causation graph (hubs, bridges, frontiers)")
+        print("     'path A to B'       → Find shortest conceptual path between two concepts")
         print("     'quit'              → Shut down")
         print(f"{'─' * 70}")
 
@@ -1373,6 +1386,12 @@ class ComputationalSerendipity:
                             dt_config=self.cfg.deep_thought,
                             embedder=self.embedder,
                             memory=self.memory,
+                            causation_graph=self.causation_graph,
+                        )
+                    if not self.collision_engine:
+                        self.collision_engine = CollisionEngine(
+                            llm=self.llm,
+                            collision_threshold=self.cfg.deep_thought.collision_threshold,
                         )
                     print(f"   🔮 DEEP THOUGHT MODE ACTIVATED")
                     print(f"   Parallel seeds: {self.cfg.deep_thought.parallel_seeds} | Max depth: {self.cfg.deep_thought.max_depth} | Min crossings: {self.cfg.deep_thought.min_domain_crossings}")
@@ -1459,12 +1478,78 @@ class ComputationalSerendipity:
                 else:
                     print("   ❌ Memory not available — install chromadb")
 
+            elif cmd in ("graph", "causation graph", "concept map"):
+                g = self.causation_graph
+                if g.node_count == 0:
+                    print("   🕸️  Causation graph is empty — it grows as chains fire")
+                    print("   Run the engine in any mode to start building your personal concept universe.")
+                else:
+                    stats = g.stats()
+                    print(f"\n   🕸️  PERSONAL CAUSATION GRAPH")
+                    print(f"   │  Nodes: {stats['nodes']} | Edges: {stats['edges']} | Avg degree: {stats['avg_degree']:.1f}")
+                    print(f"   │  Domains: {stats['domains']}")
+                    print(f"   │")
+                    if stats["top_domains"]:
+                        print(f"   ├─ TOP DOMAINS:")
+                        for domain, count in stats["top_domains"]:
+                            bar = "█" * min(20, count)
+                            print(f"   │  {domain:20s} {bar} ({count})")
+                        print(f"   │")
+                    if stats["top_hubs"]:
+                        print(f"   ├─ HUB NODES (most connected concepts):")
+                        for topic, degree, domain in stats["top_hubs"]:
+                            print(f"   │  • {topic} [{domain}] — {degree} connections")
+                        print(f"   │")
+                    bridges = g.bridge_edges(top_n=5)
+                    if bridges:
+                        print(f"   ├─ TOP BRIDGE EDGES (cross-domain connections):")
+                        for src, tgt, sd, td in bridges:
+                            print(f"   │  {src} [{sd}] → {tgt} [{td}]")
+                        print(f"   │")
+                    periphery = g.periphery_nodes(top_n=5)
+                    if periphery:
+                        print(f"   ├─ FRONTIER NODES (low connectivity, high collision potential):")
+                        for topic, domain in periphery:
+                            print(f"   │  • {topic} [{domain}]")
+                        print(f"   │")
+                    affinity = g.high_affinity_nodes(top_n=5)
+                    if affinity:
+                        print(f"   ├─ HIGH AFFINITY (concepts you've rated highly):")
+                        for topic, aff, domain in affinity:
+                            print(f"   │  • {topic} [{domain}] (affinity: {aff:+.2f})")
+                        print(f"   │")
+                    print(f"   └─ Use 'path <A> to <B>' to find shortest conceptual path")
+
+            elif cmd.startswith("path ") and " to " in cmd:
+                parts = cmd[5:].split(" to ", 1)
+                if len(parts) == 2:
+                    source = parts[0].strip()
+                    target = parts[1].strip()
+                    result = self.causation_graph.shortest_path(source, target)
+                    if result:
+                        print(f"\n   🕸️  SHORTEST PATH: {source} → {target}")
+                        print(f"   │  Hops: {result.hop_count} | Domains crossed: {len(result.domains_crossed)}")
+                        print(f"   │")
+                        for i, topic in enumerate(result.path):
+                            arrow = "●" if i == 0 else "→"
+                            print(f"   │  {arrow} {topic}")
+                        print(f"   │")
+                        print(f"   └─ Domains: {' → '.join(result.domains_crossed)}")
+                    else:
+                        print(f"   ❌ No path found between \"{source}\" and \"{target}\"")
+                        print(f"   (Both concepts must exist in the graph. Use 'graph' to see current nodes.)")
+                else:
+                    print("   ❌ Usage: path <concept A> to <concept B>")
+
             elif cmd in ("👍", "good", "like", "thumbs up", "nice"):
                 if self.memory.rate_last_interjection(5):
                     print("   ⭐ Rated last interjection 5/5 — I'll remember you liked that!")
                     self.profile.on_rating()
                     if await self.profile.rebuild_if_needed():
                         self.bridge.persona = self.profile.persona_injection
+                    if self._last_interjection and self._last_interjection.chain:
+                        self.causation_graph.propagate_rating(self._last_interjection.chain.nodes, 5)
+                        self.causation_graph.save()
                 else:
                     print("   ❌ Nothing to rate yet")
 
@@ -1474,6 +1559,9 @@ class ComputationalSerendipity:
                     self.profile.on_rating()
                     if await self.profile.rebuild_if_needed():
                         self.bridge.persona = self.profile.persona_injection
+                    if self._last_interjection and self._last_interjection.chain:
+                        self.causation_graph.propagate_rating(self._last_interjection.chain.nodes, 1)
+                        self.causation_graph.save()
                 else:
                     print("   ❌ Nothing to rate yet")
 
@@ -1487,6 +1575,9 @@ class ComputationalSerendipity:
                             self.profile.on_rating()
                             if await self.profile.rebuild_if_needed():
                                 self.bridge.persona = self.profile.persona_injection
+                            if self._last_interjection and self._last_interjection.chain:
+                                self.causation_graph.propagate_rating(self._last_interjection.chain.nodes, rating)
+                                self.causation_graph.save()
                         else:
                             print("   ❌ Nothing to rate yet")
                     else:
