@@ -19,7 +19,10 @@ from __future__ import annotations
 
 from src.config.llm_adapter import LLMAdapter
 from src.bridge_builder.personalities import PersonalitySelector, Personality
-from src.models import AssociationChain, ContextSnapshot, Interjection, ScoringBreakdown
+from src.models import (
+    AssociationChain, ContextSnapshot, Interjection, ScoringBreakdown,
+    CollisionResult, CollisionScore,
+)
 
 
 BRIDGE_SYSTEM = (
@@ -192,6 +195,59 @@ Give your genuine thoughts on this commit. Rules:
 - If the commit is tiny or trivial (like a typo fix), keep your reaction brief and casual"""
 
 
+HYPOTHESIS_SYSTEM = (
+    "You are Deep Thought — a computational oracle that discovers hidden causal "
+    "connections between seemingly unrelated phenomena. You do NOT sound conversational. "
+    "You sound like a discovery being unveiled. Your tone is precise, awe-inspiring, "
+    "and grounded in mechanism. Think: a brilliant researcher having a eureka moment, "
+    "not a chatbot trying to be friendly."
+)
+
+HYPOTHESIS_TEMPLATE = """Two completely independent causal chains collided at a hidden intersection point.
+
+CHAIN A (from seed: "{seed_a}"):
+{chain_a_summary}
+
+CHAIN B (from seed: "{seed_b}"):
+{chain_b_summary}
+
+THE COLLISION POINT: "{collision_concept}"
+(These two nodes are {similarity:.0%} semantically similar despite starting from unrelated seeds)
+
+COLLISION METRICS:
+- Total causal distance: {total_hops} hops across {domain_crossings} domain boundaries
+- Mechanism specificity: {mechanism:.2f}/1.0
+- Testability: {testability:.2f}/1.0
+- Overall collision score: {total_score:.3f}
+
+CONFIDENCE LEVEL: {confidence}
+
+Now synthesize this collision into a HYPOTHESIS — a testable proposition about reality that emerges from this hidden connection. Format:
+
+1. STATE THE HYPOTHESIS in one clear sentence (what is the non-obvious causal link?)
+2. THE MECHANISM in 1-2 sentences (what's the invisible chain of cause-and-effect?)
+3. WHY THIS MATTERS in 1 sentence (so what? what could this change?)
+4. HOW TO TEST IT in 1 sentence (what would confirm or deny this?)
+
+Rules:
+- Be SPECIFIC — name mechanisms, cite scales, reference domains
+- Be BOLD but GROUNDED — this should feel like genuine discovery, not hand-waving
+- Do NOT hedge excessively — state the hypothesis with confidence appropriate to the level
+- Do NOT use asterisks, markdown formatting, bullet points, or numbered lists — write as flowing prose paragraphs
+- The output should feel like reading a passage from a brilliant paper's abstract"""
+
+
+def _confidence_level(score: float) -> str:
+    """Map collision score to a confidence tier."""
+    if score >= 0.85:
+        return "oracle"
+    elif score >= 0.70:
+        return "high"
+    elif score >= 0.50:
+        return "medium"
+    return "low"
+
+
 class BridgeBuilder:
     def __init__(self, llm: LLMAdapter, persona: str = ""):
         self.llm = llm
@@ -340,3 +396,40 @@ class BridgeBuilder:
             return None
 
         return text
+
+    async def build_hypothesis(
+        self,
+        collision: CollisionResult,
+        scoring: CollisionScore,
+    ) -> str:
+        """Transform a scored collision into a hypothesis-style output.
+
+        Unlike build_interjection() (which makes conversational asides),
+        this produces structured discovery statements: a testable hypothesis
+        with mechanism, significance, and verification path.
+        """
+        confidence = _confidence_level(scoring.total)
+        collision.confidence = confidence
+        collision.scoring = scoring
+
+        prompt = HYPOTHESIS_TEMPLATE.format(
+            seed_a=collision.seed_a_label,
+            chain_a_summary=collision.chain_a.summary() if collision.chain_a else "",
+            seed_b=collision.seed_b_label,
+            chain_b_summary=collision.chain_b.summary() if collision.chain_b else "",
+            collision_concept=collision.collision_concept,
+            similarity=collision.collision_similarity,
+            total_hops=collision.total_hops,
+            domain_crossings=collision.total_domain_crossings,
+            mechanism=scoring.mechanism_specificity,
+            testability=scoring.testability,
+            total_score=scoring.total,
+            confidence=confidence.upper(),
+        )
+
+        resp = await self.llm.generate(
+            prompt, system=HYPOTHESIS_SYSTEM, temperature=0.85
+        )
+        hypothesis = resp.text.strip().strip('"').strip("*")
+        collision.hypothesis = hypothesis
+        return hypothesis

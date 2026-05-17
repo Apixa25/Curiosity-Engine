@@ -36,7 +36,8 @@ from src.memory.incubation import IncubationQueue
 from src.memory.profile import ProfileBuilder
 from src.memory.analytics import SerendipityAnalytics
 from src.association_engine.multi_seed import MultiSeedGenerator
-from src.models import ContextSnapshot, Interjection
+from src.association_engine.collision_engine import CollisionEngine
+from src.models import ContextSnapshot, Interjection, CollisionResult
 
 
 class ComputationalSerendipity:
@@ -117,6 +118,8 @@ class ComputationalSerendipity:
         self._overheard_buffer: list[str] = []
         self._deep_thought_active = self.cfg.creativity_mode == "deep_thought" or self.cfg.deep_thought.enabled
         self.multi_seed: MultiSeedGenerator | None = None
+        self.collision_engine: CollisionEngine | None = None
+        self._last_collision: CollisionResult | None = None
         if self._deep_thought_active:
             self.multi_seed = MultiSeedGenerator(
                 llm=self.llm,
@@ -124,6 +127,10 @@ class ComputationalSerendipity:
                 dt_config=self.cfg.deep_thought,
                 embedder=self.embedder,
                 memory=self.memory,
+            )
+            self.collision_engine = CollisionEngine(
+                llm=self.llm,
+                collision_threshold=self.cfg.deep_thought.collision_threshold,
             )
 
     def enable_multimodal(self) -> None:
@@ -251,11 +258,13 @@ class ComputationalSerendipity:
             self._thinking = False
 
     async def run_deep_thought_cycle(self, seed_topic: str, verbose: bool = True) -> Interjection | None:
-        """Run a Deep Thought cycle: multi-seed parallel chains → best chain → interjection.
+        """Run a Deep Thought cycle: multi-seed parallel chains → collision detection → hypothesis.
 
-        In Sprint 1, this generates parallel chains from multiple seeds and picks
-        the single best chain (same as normal mode, but from a much wider search).
-        Sprint 2 will add collision detection between chains from different seeds.
+        The full Deep Thought pipeline:
+        1. Generate parallel chains from multiple seeds (Sprint 1)
+        2. Detect collisions between chains from DIFFERENT seeds (Sprint 2)
+        3. If collisions found → score them → build hypothesis → output as oracle
+        4. If no collisions → fall back to best single chain (Sprint 1 behavior)
         """
         if not self.multi_seed:
             return await self.run_creative_cycle(seed_topic, verbose=verbose)
@@ -279,6 +288,66 @@ class ComputationalSerendipity:
                     print("   ❌ No chains generated across any seed.")
                 return None
 
+            # ── COLLISION DETECTION ──────────────────────────────────────
+            collisions: list[CollisionResult] = []
+            if self.collision_engine and result.seed_count >= 2:
+                if verbose:
+                    print(f"   💥 Scanning for collisions across {result.seed_count} seed groups...")
+
+                collisions = await self.collision_engine.detect_collisions(
+                    seed_chains=result.seed_chains,
+                    seed_sources=result.seed_sources,
+                )
+
+                if verbose:
+                    if collisions:
+                        print(f"   ⚡ Found {len(collisions)} bisociation collision(s)!")
+                    else:
+                        print(f"   🌀 No collisions detected — falling back to best single chain")
+
+            # ── COLLISION PATH: Score + Hypothesis ───────────────────────
+            if collisions:
+                best_collision = collisions[0]
+                dt_weights = self.cfg.deep_thought.scoring_weights
+
+                if verbose:
+                    print(f"   🎯 Scoring top collision: \"{best_collision.collision_concept}\"")
+                    print(f"      Chain A ({best_collision.seed_a_label}) ↔ Chain B ({best_collision.seed_b_label})")
+                    print(f"      Similarity: {best_collision.collision_similarity:.3f}")
+
+                collision_score = await self.scorer.score_collision(best_collision, dt_weights)
+
+                if verbose:
+                    print(f"   📐 Collision Score: {collision_score.total:.3f}")
+                    print(f"      depth={collision_score.causal_depth:.2f} seed_dist={collision_score.seed_distance:.2f} "
+                          f"hidden={collision_score.hiddenness:.2f} domains={collision_score.domain_span:.2f}")
+                    print(f"      mechanism={collision_score.mechanism_specificity:.2f} testability={collision_score.testability:.2f}")
+
+                if verbose:
+                    print(f"   🧬 Synthesizing hypothesis from collision...")
+
+                hypothesis = await self.bridge.build_hypothesis(best_collision, collision_score)
+                self._last_collision = best_collision
+
+                interjection = Interjection(
+                    heartbeat_id=ctx.heartbeat_id,
+                    chain=best_collision.chain_a,
+                    scoring=None,
+                    interjection_text=hypothesis,
+                    context=ctx,
+                    search_facts=[],
+                    search_sources=[],
+                )
+                self._last_interjection = interjection
+
+                elapsed = time.time() - t0
+                if verbose:
+                    print(f"   ⏱️  Deep Thought cycle took {elapsed:.1f}s")
+                    print(f"   🔮 Confidence: {best_collision.confidence.upper()}")
+
+                return interjection
+
+            # ── FALLBACK: Best single chain (no collisions found) ────────
             if verbose:
                 print(f"   📊 Scoring top {min(5, len(result.all_chains))} of {result.total_chains} chains from {result.seed_count} seeds...")
 
@@ -474,10 +543,10 @@ class ComputationalSerendipity:
         print("     'rate 1-5'          → Rate last interjection (1=terrible, 5=amazing)")
         print("     'build on that'     → Start brainstorming together (co-creation mode)")
         print("     'done'              → End brainstorm, back to normal")
-        print("     'reveal'            → Show the full causal chain behind last interjection")
-        print("     'transparency'      → Auto-show causal chains (toggle on/off)")
+        print("     'reveal'            → Show the full causal chain (or collision) behind last output")
+        print("     'transparency'      → Auto-show causal chains / collisions (toggle on/off)")
         print("     'stats'             → Serendipity metrics and AHA! rate over time")
-        print("     'deep thought'      → Activate Deep Thought mode (parallel chains, butterfly-effect)")
+        print("     'deep thought'      → Activate Deep Thought mode (parallel chains, collisions)")
         print("     'normal mode'       → Return to normal creative companion mode")
         print("     'mode'              → Show current creativity mode")
         print("     'quit'              → Shut down")
@@ -585,6 +654,7 @@ class ComputationalSerendipity:
     async def _heartbeat_creative(self, ctx: ContextSnapshot, seed: str) -> None:
         """Full creative pipeline: association tree + scoring + search + bridge.
         In Deep Thought mode, routes through multi-seed parallel generation."""
+        self._last_collision = None
         if self._deep_thought_active:
             interjection = await self.run_deep_thought_cycle(seed, verbose=True)
         else:
@@ -592,17 +662,29 @@ class ComputationalSerendipity:
 
         if interjection:
             self._last_interjection = interjection
-            from src.bridge_builder.builder import _get_excitement_tier
-            tier = _get_excitement_tier(interjection.scoring.total)
-            tier_label = tier["name"].upper()
-            personality_tag = f" | {self.bridge._last_personality.emoji} {self.bridge._last_personality.name}" if self.bridge._last_personality else ""
-            print(f"\n{'═' * 70}")
-            print(f"💬 SERENDIPITY SAYS  [{tier_label} | score: {interjection.scoring.total:.2f}{personality_tag}]:\n")
-            print(f"   \"{interjection.interjection_text}\"")
-            print(f"\n{'═' * 70}")
-            self._print_citations(interjection)
-            if self._transparency:
-                self._print_causal_chain(interjection)
+
+            if self._last_collision and self._deep_thought_active:
+                confidence = self._last_collision.confidence.upper()
+                score = self._last_collision.scoring.total if self._last_collision.scoring else 0.0
+                print(f"\n{'═' * 70}")
+                print(f"🔮 DEEP THOUGHT  [COLLISION | confidence: {confidence} | score: {score:.3f}]:\n")
+                print(f"   \"{interjection.interjection_text}\"")
+                print(f"\n{'═' * 70}")
+                if self._transparency:
+                    self._print_collision_reveal(self._last_collision)
+            else:
+                from src.bridge_builder.builder import _get_excitement_tier
+                tier = _get_excitement_tier(interjection.scoring.total if interjection.scoring else 0.5)
+                tier_label = tier["name"].upper()
+                personality_tag = f" | {self.bridge._last_personality.emoji} {self.bridge._last_personality.name}" if self.bridge._last_personality else ""
+                print(f"\n{'═' * 70}")
+                print(f"💬 SERENDIPITY SAYS  [{tier_label} | score: {interjection.scoring.total:.2f if interjection.scoring else 0.0}{personality_tag}]:\n")
+                print(f"   \"{interjection.interjection_text}\"")
+                print(f"\n{'═' * 70}")
+                self._print_citations(interjection)
+                if self._transparency:
+                    self._print_causal_chain(interjection)
+
             self.responder.add_engine_interjection(interjection.interjection_text)
             await self._speak(interjection.interjection_text)
         else:
@@ -1105,7 +1187,9 @@ class ComputationalSerendipity:
                     self.heartbeat._remaining_seconds = 0
 
             elif cmd in ("reveal", "show chain", "causation", "why"):
-                if self._last_interjection:
+                if self._last_collision:
+                    self._print_collision_reveal(self._last_collision)
+                elif self._last_interjection:
                     self._print_causal_chain(self._last_interjection)
                 else:
                     print("   ❌ No interjection to reveal yet")
@@ -1326,6 +1410,62 @@ class ComputationalSerendipity:
         print(f"\n   💡 The causation is complex. The output feels spontaneous.")
         print(f"      That's the whole point.")
         print(f"{'─' * 70}")
+
+    def _print_collision_reveal(self, collision: CollisionResult) -> None:
+        """Reveal the full bisociation collision that produced a Deep Thought hypothesis."""
+        print(f"\n{'═' * 70}")
+        print(f"💥 BISOCIATION COLLISION REVEALED (Deep Thought transparency)")
+        print(f"{'═' * 70}")
+
+        print(f"\n   ┌─ CHAIN A (seed: {collision.seed_a_label})")
+        if collision.chain_a and collision.chain_a.nodes:
+            for i, node in enumerate(collision.chain_a.nodes):
+                arrow = "●" if i == 0 else "→"
+                marker = " ◉ COLLISION" if node == collision.collision_node_a else ""
+                print(f"   │  {arrow} {node.topic} [{node.domain}]{marker}")
+        print(f"   │")
+
+        print(f"   ├─ CHAIN B (seed: {collision.seed_b_label})")
+        if collision.chain_b and collision.chain_b.nodes:
+            for i, node in enumerate(collision.chain_b.nodes):
+                arrow = "●" if i == 0 else "→"
+                marker = " ◉ COLLISION" if node == collision.collision_node_b else ""
+                print(f"   │  {arrow} {node.topic} [{node.domain}]{marker}")
+        print(f"   │")
+
+        print(f"   ├─ COLLISION POINT")
+        print(f"   │  Shared concept: \"{collision.collision_concept}\"")
+        print(f"   │  Cosine similarity: {collision.collision_similarity:.4f}")
+        print(f"   │  Total hops: {collision.total_hops} | Domain crossings: {collision.total_domain_crossings}")
+        print(f"   │")
+
+        if collision.scoring:
+            s = collision.scoring
+            print(f"   ├─ COLLISION SCORING")
+            print(f"   │  causal_depth         : {s.causal_depth:.3f} (×0.20)")
+            print(f"   │  seed_distance        : {s.seed_distance:.3f} (×0.20)")
+            print(f"   │  hiddenness           : {s.hiddenness:.3f} (×0.15)")
+            print(f"   │  domain_span          : {s.domain_span:.3f} (×0.15)")
+            print(f"   │  mechanism_specificity: {s.mechanism_specificity:.3f} (×0.15)")
+            print(f"   │  testability          : {s.testability:.3f} (×0.15)")
+            print(f"   │  TOTAL                : {s.total:.3f}")
+            print(f"   │")
+
+        print(f"   ├─ CONFIDENCE: {collision.confidence.upper()}")
+        print(f"   │")
+
+        if collision.hypothesis:
+            print(f"   └─ HYPOTHESIS")
+            for line in collision.hypothesis.split('\n'):
+                if line.strip():
+                    print(f"      {line.strip()}")
+        else:
+            print(f"   └─ (no hypothesis generated)")
+
+        print(f"\n   🧠 Two independent causal threads — invisible to each other —")
+        print(f"      found a shared mechanism buried {collision.total_hops} hops deep.")
+        print(f"      This is computational bisociation. This is Deep Thought.")
+        print(f"{'═' * 70}")
 
     async def _show_serendipity_stats(self) -> None:
         """Display the serendipity self-evaluation report."""
