@@ -18,6 +18,7 @@ in real, specific facts — not just LLM training data.
 from __future__ import annotations
 
 from src.config.llm_adapter import LLMAdapter
+from src.bridge_builder.personalities import PersonalitySelector, Personality
 from src.models import AssociationChain, ContextSnapshot, Interjection, ScoringBreakdown
 
 
@@ -195,12 +196,21 @@ class BridgeBuilder:
     def __init__(self, llm: LLMAdapter, persona: str = ""):
         self.llm = llm
         self.persona = persona
+        self.personality_selector = PersonalitySelector()
+        self._last_personality: Personality | None = None
 
-    def _system_prompt(self) -> str:
-        """Build the system prompt, injecting persona if available."""
+    def _system_prompt(self, personality: Personality | None = None) -> str:
+        """Build the system prompt, injecting persona and personality if available."""
+        parts = [BRIDGE_SYSTEM]
         if self.persona:
-            return BRIDGE_SYSTEM + "\n\n" + self.persona
-        return BRIDGE_SYSTEM
+            parts.append(self.persona)
+        if personality:
+            parts.append(personality.tone_injection)
+        return "\n\n".join(parts)
+
+    @property
+    def last_personality_name(self) -> str:
+        return self._last_personality.name if self._last_personality else ""
 
     async def build_commit_review(self, commit_info, user_context: str = "") -> str | None:
         """Generate a thoughtful, direct review of a git commit.
@@ -241,9 +251,17 @@ class BridgeBuilder:
         search_sources: list[str] | None = None,
     ) -> Interjection:
         """Transform a scored chain into a natural interjection.
-        The excitement tier (and thus length/tone) scales with the interest score."""
+        The excitement tier (and thus length/tone) scales with the interest score.
+        A personality is selected based on the chain's domains and excitement level."""
 
         tier = _get_excitement_tier(scoring.total)
+
+        domains = chain.nodes[-1].chain_domains() if chain.nodes else []
+        personality = self.personality_selector.select(
+            domains=domains,
+            tier_name=tier["name"],
+        )
+        self._last_personality = personality
 
         if search_facts:
             facts_text = "\n".join(f"- {fact}" for fact in search_facts)
@@ -271,7 +289,9 @@ class BridgeBuilder:
             )
 
         temp = 0.7 if tier["name"] == "casual" else 0.8 if tier["name"] == "interested" else 0.85
-        resp = await self.llm.generate(prompt, system=self._system_prompt(), temperature=temp)
+        resp = await self.llm.generate(
+            prompt, system=self._system_prompt(personality), temperature=temp
+        )
 
         text = resp.text.strip().strip('"').strip("*")
 

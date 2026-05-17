@@ -27,6 +27,7 @@ from src.input_pipeline.screen import ScreenChannel
 from src.input_pipeline.assembler import ContextAssembler
 from src.input_pipeline.address_detector import AddressDetector
 from src.conversation.responder import DirectResponder
+from src.conversation.cocreation import CoCreator
 from src.output.voice import VoiceOutput, VoiceConfig
 from src.input_pipeline.git_monitor import GitMonitor
 from src.embeddings.provider import EmbeddingProvider, EmbeddingConfig
@@ -78,6 +79,8 @@ class CreativityEngine:
         self.assembler: ContextAssembler | None = None
         self.detector: AddressDetector = AddressDetector(llm=self.llm)
         self.responder: DirectResponder = DirectResponder(llm=self.llm)
+        self.cocreator: CoCreator = CoCreator(llm=self.llm)
+        self._last_interjection: Interjection | None = None
         self.voice: VoiceOutput = VoiceOutput(VoiceConfig(
             enabled=self.cfg.voice.enabled,
             model=self.cfg.voice.model,
@@ -358,6 +361,8 @@ class CreativityEngine:
         print("     '👍' or 'good'      → Rate last interjection positively")
         print("     '👎' or 'bad'       → Rate last interjection negatively")
         print("     'rate 1-5'          → Rate last interjection (1=terrible, 5=amazing)")
+        print("     'build on that'     → Start brainstorming together (co-creation mode)")
+        print("     'done'              → End brainstorm, back to normal")
         print("     'quit'              → Shut down")
         print(f"{'─' * 70}")
 
@@ -465,11 +470,13 @@ class CreativityEngine:
         interjection = await self.run_creative_cycle(seed, verbose=True)
 
         if interjection:
+            self._last_interjection = interjection
             from src.bridge_builder.builder import _get_excitement_tier
             tier = _get_excitement_tier(interjection.scoring.total)
             tier_label = tier["name"].upper()
+            personality_tag = f" | {self.bridge._last_personality.emoji} {self.bridge._last_personality.name}" if self.bridge._last_personality else ""
             print(f"\n{'═' * 70}")
-            print(f"💬 CREATIVITY ENGINE SAYS  [{tier_label} | score: {interjection.scoring.total:.2f}]:\n")
+            print(f"💬 CREATIVITY ENGINE SAYS  [{tier_label} | score: {interjection.scoring.total:.2f}{personality_tag}]:\n")
             print(f"   \"{interjection.interjection_text}\"")
             print(f"\n{'═' * 70}")
             self._print_citations(interjection)
@@ -939,6 +946,10 @@ class CreativityEngine:
                 print(f"      Memory: {self.memory.chain_count} chains stored")
                 print(f"      Incubating: {self.incubation.queue_size} ideas")
                 print(f"      Profile: {'✅ built' if self.profile.has_profile else '⏳ needs more ratings'}")
+                if self.cocreator.is_active:
+                    print(f"      Brainstorm: 🤝 active ({len(self.cocreator.session.turns)} turns)")
+                if self.bridge.last_personality_name:
+                    print(f"      Last personality: {self.bridge._last_personality.emoji} {self.bridge.last_personality_name}")
 
             elif cmd == "mute":
                 self.voice.cfg.enabled = False
@@ -1005,6 +1016,17 @@ class CreativityEngine:
                 except ValueError:
                     print("   ❌ Use 'rate 1' through 'rate 5'")
 
+            elif self.cocreator.is_active:
+                if CoCreator.is_exit(user_input):
+                    turns = len(self.cocreator.session.turns)
+                    self.cocreator.end_session()
+                    print(f"   🤝 Brainstorm ended ({turns} exchanges). Back to normal mode!")
+                else:
+                    await self._handle_cocreation(user_input)
+
+            elif CoCreator.is_trigger(user_input) and self._last_interjection:
+                await self._start_cocreation(user_input)
+
             else:
                 typed_result = self.detector.detect(user_input, self.current_context)
                 if typed_result.mode == "DIRECT":
@@ -1013,6 +1035,58 @@ class CreativityEngine:
                     self.current_context = user_input
                     self.incubation.set_context(user_input)
                     print(f"   ✅ Context updated: \"{self.current_context}\"")
+
+    # ── CO-CREATION MODE ─────────────────────────────────────────────
+
+    async def _start_cocreation(self, trigger_text: str) -> None:
+        """Enter co-creation mode based on the last interjection."""
+        interjection = self._last_interjection
+        chain = interjection.chain if interjection else None
+
+        self.cocreator.start_session(
+            interjection_text=interjection.interjection_text if interjection else "",
+            seed_topic=chain.seed_topic if chain else "",
+            endpoint_topic=chain.endpoint_topic if chain else "",
+            chain_summary=chain.summary() if chain else "",
+        )
+
+        print(f"\n   +{'=' * 48}+")
+        print(f"   |  🤝 CO-CREATION MODE ACTIVATED               |")
+        print(f"   |  Brainstorming together! Say 'done' to exit.  |")
+        print(f"   +{'=' * 48}+")
+
+        if self.audio:
+            self.audio.paused = True
+
+        reply = await self.cocreator.respond(trigger_text, self.current_context)
+
+        print(f"\n{'═' * 70}")
+        print(f"🤝 BRAINSTORM:\n")
+        print(f"   \"{reply}\"")
+        print(f"\n{'═' * 70}")
+        self.responder.add_engine_interjection(reply)
+        await self._speak(reply)
+
+        if self.audio:
+            self.audio.paused = False
+
+    async def _handle_cocreation(self, user_input: str) -> None:
+        """Continue an active co-creation session."""
+        if self.audio:
+            self.audio.paused = True
+
+        print(f"   🤝 You said: \"{user_input[:70]}\"")
+        reply = await self.cocreator.respond(user_input, self.current_context)
+
+        print(f"\n{'═' * 70}")
+        print(f"🤝 BRAINSTORM:\n")
+        print(f"   \"{reply}\"")
+        print(f"\n{'═' * 70}")
+        self.responder.add_engine_interjection(reply)
+        await self._speak(reply)
+
+        if self.audio:
+            self.audio.paused = False
 
     # ── SINGLE-FIRE & INTERACTIVE MODES (unchanged) ──────────────────
 
