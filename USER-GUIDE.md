@@ -160,6 +160,7 @@ Instead of generating one chain from current context, Deep Thought generates **5
 ```
 
 **Seed sources explained:**
+
 - **Current context** — Standard: what you're doing right now
 - **Random memory** — A random past chain endpoint resurfaced from ChromaDB
 - **Inverse context** — LLM asked: "What is the conceptual OPPOSITE of [context]?" (forces divergence)
@@ -172,6 +173,7 @@ Instead of generating one chain from current context, Deep Thought generates **5
 In normal mode, we reward chains that cover semantic distance efficiently (fewer hops = better).
 
 **In Deep Thought mode, we INVERT this.** More hops to cover the same semantic distance = better. Why? Because:
+
 - More intermediate nodes = more chances for hidden collisions
 - Longer chains = more "buried" causation = more invisible to humans
 - Efficiency means obvious connections; inefficiency means hidden mechanisms
